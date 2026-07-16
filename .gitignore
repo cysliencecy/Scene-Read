@@ -1,0 +1,22 @@
+﻿# Dependencies
+node_modules/
+
+# Expo / React Native local state
+.expo/
+expo-web.out.log
+expo-web.err.log
+
+# IDE / editor state
+.idea/
+.vscode/
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local env files
+.env
+.env.*
+!.env.example
+

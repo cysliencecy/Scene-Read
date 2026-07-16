@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>阅境 SceneReader UI Prototype</title>
+  <style>
+    :root {
+      --bg: #f5f3ee;
+      --panel: #ffffff;
+      --ink: #24211d;
+      --muted: #6f6a61;
+      --line: #ded8ce;
+      --accent: #2f7668;
+      --accent-soft: #e3f0ec;
+      --gold: #b9822b;
+      --danger: #a1493f;
+      --shadow: 0 18px 45px rgba(46, 39, 29, 0.11);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 280px minmax(420px, 1fr) 340px;
+    }
+
+    .sidebar,
+    .inspector {
+      background: var(--panel);
+      border-color: var(--line);
+      border-style: solid;
+    }
+
+    .sidebar {
+      border-width: 0 1px 0 0;
+      padding: 22px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .inspector {
+      border-width: 0 0 0 1px;
+      padding: 22px 18px;
+      overflow-y: auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      min-height: 44px;
+    }
+
+    .mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #243b36;
+      color: #f8f1e7;
+      font-weight: 700;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    .brand span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .section {
+      border-top: 1px solid var(--line);
+      padding-top: 16px;
+    }
+
+    .section:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .dropzone {
+      border: 1px dashed #b9afa0;
+      border-radius: 8px;
+      min-height: 116px;
+      padding: 16px;
+      background:
+        linear-gradient(135deg, rgba(47, 118, 104, 0.08), transparent 46%),
+        #fbfaf7;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .dropzone strong {
+      font-size: 14px;
+    }
+
+    .dropzone small {
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .select,
+    .button,
+    .ghost {
+      width: 100%;
+      height: 38px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      padding: 0 11px;
+    }
+
+    .button {
+      border: 0;
+      background: var(--accent);
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .ghost {
+      background: #f9f7f2;
+      cursor: pointer;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .stat {
+      min-height: 68px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      padding: 11px;
+      background: #fbfaf7;
+    }
+
+    .stat b {
+      display: block;
+      font-size: 20px;
+      margin-bottom: 3px;
+    }
+
+    .stat span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      height: 66px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(245, 243, 238, 0.9);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 28px;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      backdrop-filter: blur(10px);
+    }
+
+    .topbar h2 {
+      margin: 0;
+      font-size: 17px;
+    }
+
+    .topbar p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .segmented {
+      display: flex;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+      flex-shrink: 0;
+    }
+
+    .segmented button {
+      height: 34px;
+      padding: 0 13px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: transparent;
+      cursor: pointer;
+      color: var(--muted);
+    }
+
+    .segmented button:last-child {
+      border-right: 0;
+    }
+
+    .segmented .active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .reader {
+      width: min(860px, 100%);
+      margin: 0 auto;
+      padding: 34px 32px 56px;
+    }
+
+    .chapter {
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(222, 216, 206, 0.75);
+      border-radius: 8px;
+      padding: 42px 54px;
+    }
+
+    .chapter h3 {
+      margin: 0 0 8px;
+      font-size: 26px;
+      line-height: 1.25;
+      font-weight: 800;
+    }
+
+    .chapter-meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 30px;
+    }
+
+    .chapter p {
+      margin: 0 0 18px;
+      font-size: 17px;
+      line-height: 2;
+    }
+
+    .scene-insert {
+      margin: 30px 0 34px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: #111;
+    }
+
+    .scene-art {
+      min-height: 245px;
+      position: relative;
+      display: flex;
+      align-items: flex-end;
+      padding: 18px;
+      color: #fff;
+      background-size: cover;
+      background-position: center;
+    }
+
+    .scene-art.office {
+      background-image:
+        linear-gradient(to top, rgba(0, 0, 0, 0.68), rgba(0, 0, 0, 0.08)),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='900' height='520'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1' y1='0' y2='1'%3E%3Cstop stop-color='%23324848'/%3E%3Cstop offset='1' stop-color='%2388a9a3'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect fill='url(%23g)' width='900' height='520'/%3E%3Crect x='82' y='86' width='218' height='126' fill='%23cfd8d5' opacity='.75'/%3E%3Crect x='340' y='82' width='180' height='260' fill='%232c3638' opacity='.68'/%3E%3Crect x='560' y='118' width='250' height='170' fill='%23d9dfda' opacity='.55'/%3E%3Crect x='0' y='350' width='900' height='170' fill='%23202a2c' opacity='.72'/%3E%3Crect x='120' y='302' width='235' height='42' fill='%23e2c58a' opacity='.74'/%3E%3Crect x='132' y='344' width='18' height='96' fill='%231c2020'/%3E%3Crect x='327' y='344' width='18' height='96' fill='%231c2020'/%3E%3Ccircle cx='662' cy='277' r='42' fill='%23272f31'/%3E%3Crect x='630' y='318' width='68' height='132' rx='24' fill='%23272f31'/%3E%3Cpath d='M0 430 C160 382 265 470 430 430 S745 378 900 425 L900 520 L0 520 Z' fill='%23141819' opacity='.55'/%3E%3C/svg%3E");
+    }
+
+    .scene-art.street {
+      background-image:
+        linear-gradient(to top, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.05)),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='900' height='520'%3E%3Cdefs%3E%3ClinearGradient id='s' x1='0' x2='1' y1='0' y2='1'%3E%3Cstop stop-color='%23283d57'/%3E%3Cstop offset='1' stop-color='%237b6a58'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect fill='url(%23s)' width='900' height='520'/%3E%3Crect x='58' y='72' width='160' height='330' fill='%23192635' opacity='.8'/%3E%3Crect x='270' y='38' width='190' height='388' fill='%232d3441' opacity='.75'/%3E%3Crect x='565' y='90' width='220' height='318' fill='%231c2730' opacity='.72'/%3E%3Cg fill='%23f0d58b' opacity='.72'%3E%3Crect x='93' y='118' width='36' height='28'/%3E%3Crect x='151' y='165' width='36' height='28'/%3E%3Crect x='318' y='105' width='42' height='31'/%3E%3Crect x='385' y='168' width='42' height='31'/%3E%3Crect x='615' y='142' width='48' height='30'/%3E%3Crect x='696' y='205' width='48' height='30'/%3E%3C/g%3E%3Cpath d='M340 520 L445 286 L560 520 Z' fill='%2312161e' opacity='.72'/%3E%3Cpath d='M0 390 C160 420 260 365 420 400 S712 438 900 382 L900 520 L0 520 Z' fill='%23131921'/%3E%3Cg fill='%23d9dde0' opacity='.5'%3E%3Ccircle cx='140' cy='438' r='3'/%3E%3Ccircle cx='190' cy='460' r='2'/%3E%3Ccircle cx='650' cy='430' r='3'/%3E%3Ccircle cx='760' cy='468' r='2'/%3E%3C/g%3E%3C/svg%3E");
+    }
+
+    .scene-caption {
+      max-width: 620px;
+      text-shadow: 0 1px 12px rgba(0, 0, 0, 0.55);
+    }
+
+    .scene-caption b {
+      display: block;
+      font-size: 15px;
+      margin-bottom: 4px;
+    }
+
+    .scene-caption span {
+      font-size: 12px;
+      opacity: 0.9;
+    }
+
+    .scene-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 42px;
+      padding: 0 14px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .panel-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .panel-title h3 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .panel-title small {
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .candidate-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .candidate {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfaf7;
+      cursor: pointer;
+    }
+
+    .candidate.selected {
+      border-color: rgba(47, 118, 104, 0.65);
+      background: var(--accent-soft);
+    }
+
+    .candidate-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .candidate p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .thumb {
+      height: 150px;
+      border-radius: 8px;
+      margin: 12px 0;
+      background-size: cover;
+      background-position: center;
+      border: 1px solid var(--line);
+    }
+
+    .prompt-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfaf7;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .checklist {
+      margin: 14px 0 0;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .checklist li {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      margin-top: 6px;
+      background: var(--accent);
+      flex: 0 0 auto;
+    }
+
+    .mobile-tabs {
+      display: none;
+    }
+
+    @media (max-width: 1120px) {
+      .app {
+        grid-template-columns: 250px minmax(0, 1fr);
+      }
+
+      .inspector {
+        display: none;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .app {
+        display: block;
+      }
+
+      .sidebar {
+        border-width: 0 0 1px 0;
+      }
+
+      .topbar {
+        height: auto;
+        min-height: 70px;
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 14px 18px;
+      }
+
+      .segmented {
+        width: 100%;
+      }
+
+      .segmented button {
+        flex: 1;
+      }
+
+      .reader {
+        padding: 18px 14px 34px;
+      }
+
+      .chapter {
+        padding: 28px 20px;
+      }
+
+      .chapter h3 {
+        font-size: 22px;
+      }
+
+      .chapter p {
+        font-size: 16px;
+      }
+
+      .scene-art {
+        min-height: 210px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">阅</div>
+        <div>
+          <h1>阅境</h1>
+          <span>SceneReader 原型</span>
+        </div>
+      </div>
+
+      <section class="section">
+        <label class="label">书籍输入</label>
+        <div class="dropzone">
+          <strong>拖入 TXT / EPUB</strong>
+          <small>第一版只处理一章，用于验证地点变化识别和插图位置。</small>
+        </div>
+      </section>
+
+      <section class="section">
+        <label class="label" for="chapter">章节</label>
+        <select class="select" id="chapter">
+          <option>第一章 雨夜之后</option>
+          <option>第二章 新办公室</option>
+          <option>第三章 回到旧街</option>
+        </select>
+      </section>
+
+      <section class="section">
+        <label class="label" for="style">图片风格</label>
+        <select class="select" id="style">
+          <option>写实</option>
+          <option>动漫</option>
+          <option>插画</option>
+        </select>
+      </section>
+
+      <section class="section">
+        <button class="button">解析并生成预览</button>
+      </section>
+
+      <section class="section">
+        <div class="stats">
+          <div class="stat">
+            <b>12</b>
+            <span>候选场景</span>
+          </div>
+          <div class="stat">
+            <b>6</b>
+            <span>插图点</span>
+          </div>
+          <div class="stat">
+            <b>2</b>
+            <span>重复地点</span>
+          </div>
+          <div class="stat">
+            <b>1</b>
+            <span>需复核</span>
+          </div>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h2>单章 HTML 图文版故事书</h2>
+          <p>完整原文 + 地点变化插图 + 候选场景复核</p>
+        </div>
+        <div class="segmented" aria-label="视图切换">
+          <button class="active">阅读预览</button>
+          <button>候选列表</button>
+          <button>导出 HTML</button>
+        </div>
+      </header>
+
+      <div class="reader">
+        <article class="chapter">
+          <h3>第一章 雨夜之后</h3>
+          <div class="chapter-meta">现代中文小说样章 · 自动筛选 6 个地点变化 · 写实风格</div>
+
+          <p>雨声在窗外持续了整夜。林知夏醒来时，手机屏幕上还停着昨晚没有发出去的消息。客厅里只剩下一盏落地灯，沙发边的杯子已经凉透。</p>
+          <p>她在玄关站了很久，直到楼下传来第一班公交车的声音，才拿起外套，关上门。</p>
+
+          <section class="scene-insert">
+            <div class="scene-art street">
+              <div class="scene-caption">
+                <b>插图 01 · 家中玄关 → 雨后街道</b>
+                <span>清晨、湿润街面、城市住宅区、现实主义构图</span>
+              </div>
+            </div>
+            <div class="scene-footer">
+              <span>触发原文：关上门后进入街道环境</span>
+              <span class="tag">地点变化明确</span>
+            </div>
+          </section>
+
+          <p>街道被雨水洗得发亮，便利店的招牌还亮着。她沿着人行道往地铁站走，耳机里没有音乐，只有雨滴从树叶上落下来的声音。</p>
+          <p>九点差五分，她推开公司玻璃门。前台的灯刚刚打开，走廊尽头的会议室已经坐了几个人。空气里有咖啡和打印纸混在一起的味道。</p>
+
+          <section class="scene-insert">
+            <div class="scene-art office">
+              <div class="scene-caption">
+                <b>插图 02 · 雨后街道 → 公司办公室</b>
+                <span>现代办公楼、玻璃门、冷色晨光、安静压迫感</span>
+              </div>
+            </div>
+            <div class="scene-footer">
+              <span>触发原文：推开公司玻璃门</span>
+              <span class="tag">已插入</span>
+            </div>
+          </section>
+
+          <p>她把包放在工位旁，打开电脑，屏幕上的未读邮件一封接一封弹出来。会议开始前，主管从她身后经过，只留下一句：“十分钟后，把昨晚的版本拿来。”</p>
+          <p>林知夏没有回答。她看着窗外还没散开的云，忽然想起很久以前那条旧街，以及街角那家已经关门的书店。</p>
+        </article>
+      </div>
+    </main>
+
+    <aside class="inspector">
+      <div class="panel-title">
+        <h3>候选场景</h3>
+        <small>自动选 6 / 12</small>
+      </div>
+
+      <div class="candidate-list">
+        <div class="candidate selected">
+          <div class="candidate-head">
+            <span>01 家中玄关 → 雨后街道</span>
+            <span class="tag">已插入</span>
+          </div>
+          <p>“才拿起外套，关上门。” 后进入室外街道环境。</p>
+        </div>
+
+        <div class="candidate selected">
+          <div class="candidate-head">
+            <span>02 雨后街道 → 公司办公室</span>
+            <span class="tag">已插入</span>
+          </div>
+          <p>“推开公司玻璃门” 明确进入办公室场景。</p>
+        </div>
+
+        <div class="candidate">
+          <div class="candidate-head">
+            <span>03 工位 → 会议室</span>
+            <span>候选</span>
+          </div>
+          <p>同一办公楼内移动，环境变化较弱，暂不插图。</p>
+        </div>
+
+        <div class="candidate">
+          <div class="candidate-head">
+            <span>04 办公室 → 旧街回忆</span>
+            <span>需复核</span>
+          </div>
+          <p>可能是回忆地点，不确定是否应作为当前阅读场景。</p>
+        </div>
+      </div>
+
+      <div class="section" style="margin-top:18px;">
+        <div class="panel-title">
+          <h3>当前插图</h3>
+          <small>02</small>
+        </div>
+        <div class="thumb scene-art office" aria-hidden="true"></div>
+        <div class="prompt-box">
+          写实风格，现代公司办公室入口，清晨冷色光线，玻璃门、前台灯光、走廊尽头会议室，空气安静而压迫，电影感构图，人物不需要清晰正脸，避免夸张奇幻元素和卡通比例。
+        </div>
+        <ul class="checklist">
+          <li><span class="dot"></span><span>插图位于地点变化之后</span></li>
+          <li><span class="dot"></span><span>提示词可从原文解释</span></li>
+          <li><span class="dot"></span><span>同地点再次出现时复用参考图</span></li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+</body>
+</html>
