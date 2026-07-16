@@ -22,9 +22,9 @@ export const initialNavigationState: AppNavigationState = {
   visualStyle: '写实',
 };
 
-export function getRouteTitle(route: AppRoute) {
+export function getRouteTitle(route: AppRoute, chapterTitle?: string) {
   if (route.name === 'Import') return '导入书籍';
   if (route.name === 'Style') return '选择画面风格';
-  if (route.name === 'Reader') return '第一章 雨夜之后';
+  if (route.name === 'Reader') return chapterTitle ?? '阅读';
   return '阅境';
 }

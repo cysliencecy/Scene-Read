@@ -11,8 +11,12 @@ export function ImportScreen({ onNext }: { onNext: () => void }) {
         </View>
         <Text style={styles.importTitle}>选择一本书</Text>
         <Text style={styles.importDescription}>支持 TXT / EPUB</Text>
+        <View style={styles.mockFile}>
+          <Text style={styles.mockFileName}>岛屿来信.epub</Text>
+          <Text style={styles.mockFileMeta}>模拟本地导入 · EPUB</Text>
+        </View>
         <Pressable accessibilityRole="button" onPress={onNext} style={sharedStyles.primaryButton}>
-          <Text style={sharedStyles.primaryButtonText}>从文件中导入</Text>
+          <Text style={sharedStyles.primaryButtonText}>使用该书继续</Text>
         </Pressable>
       </View>
     </View>
@@ -44,4 +48,16 @@ const styles = StyleSheet.create({
   importIconText: { color: '#fff', fontSize: 34, fontWeight: '700' },
   importTitle: { color: colors.ink, fontSize: 22, fontWeight: '800' },
   importDescription: { marginTop: 10, color: colors.muted, fontSize: 14 },
+  mockFile: {
+    width: '100%',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(37,34,30,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginTop: 18,
+  },
+  mockFileName: { color: colors.ink, fontSize: 14, fontWeight: '800' },
+  mockFileMeta: { color: colors.muted, fontSize: 12, marginTop: 4 },
 });

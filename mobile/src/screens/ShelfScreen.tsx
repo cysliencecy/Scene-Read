@@ -1,25 +1,35 @@
 ﻿import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { books } from '../data/mockData';
 import { colors } from '../theme/colors';
 import { sharedStyles } from '../theme/sharedStyles';
+import type { Book } from '../types/app';
 
 export function ShelfScreen({
+  books,
+  featuredBookId,
   onImport,
   onRead,
 }: {
+  books: Book[];
+  featuredBookId: string;
   onImport: () => void;
   onRead: (bookId: string) => void;
 }) {
+  const featuredBook = books.find((book) => book.id === featuredBookId) ?? books[0];
+
   return (
     <ScrollView style={sharedStyles.screen} contentContainerStyle={sharedStyles.screenContent}>
       <View style={styles.shelfHeader}>
         <Text style={styles.logo}>阅境</Text>
       </View>
 
-      <Pressable accessibilityRole="button" onPress={() => onRead('rain')} style={styles.heroCard}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => onRead(featuredBook.id)}
+        style={styles.heroCard}
+      >
         <Text style={styles.heroEyebrow}>继续阅读</Text>
-        <Text style={styles.heroTitle}>雨夜之后</Text>
-        <Text style={styles.heroDescription}>上次读到清晨街道，阅读到 38%</Text>
+        <Text style={styles.heroTitle}>{featuredBook.title}</Text>
+        <Text style={styles.heroDescription}>{featuredBook.lastReadLabel}</Text>
         <View style={styles.heroAction}>
           <Text style={styles.heroActionText}>继续</Text>
         </View>
@@ -153,3 +163,4 @@ const styles = StyleSheet.create({
   importBookTitle: { color: colors.deep, fontSize: 13, fontWeight: '800' },
   importBookMeta: { marginTop: 5, color: colors.muted, fontSize: 10, textAlign: 'center' },
 });
+

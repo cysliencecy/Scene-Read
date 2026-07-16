@@ -7,19 +7,39 @@ import {
   type AppNavigationState,
   type AppRoute,
 } from './src/navigation/routes';
+import { books as initialBooks, findBook, findChapter } from './src/data/mockData';
 import { ImportScreen } from './src/screens/ImportScreen';
 import { ReaderScreen } from './src/screens/ReaderScreen';
 import { ShelfScreen } from './src/screens/ShelfScreen';
 import { StyleScreen } from './src/screens/StyleScreen';
 import { colors } from './src/theme/colors';
-import type { VisualStyle } from './src/types/app';
+import type { Book, VisualStyle } from './src/types/app';
+
+const importedBookTemplate: Book = {
+  id: 'island',
+  title: '岛屿来信',
+  progress: '新导入',
+  accent: '#426f76',
+  currentChapterId: 'island-chapter-1',
+  lastReadLabel: '第一章 海风里的信',
+};
 
 export default function App() {
   const [navigation, setNavigation] = useState<AppNavigationState>(initialNavigationState);
+  const [shelfBooks, setShelfBooks] = useState<Book[]>(initialBooks);
+  const [pendingImportBook, setPendingImportBook] = useState<Book | null>(null);
   const [showControls, setShowControls] = useState(false);
   const route = navigation.route;
+  const currentBook = useMemo(
+    () => shelfBooks.find((book) => book.id === navigation.selectedBookId) ?? findBook(navigation.selectedBookId),
+    [navigation.selectedBookId, shelfBooks],
+  );
+  const currentChapter = useMemo(
+    () => findChapter(navigation.selectedChapterId),
+    [navigation.selectedChapterId],
+  );
 
-  const title = useMemo(() => getRouteTitle(route), [route]);
+  const title = useMemo(() => getRouteTitle(route, currentChapter.title), [currentChapter.title, route]);
 
   const navigate = (nextRoute: AppRoute) => {
     setNavigation((current) => ({ ...current, route: nextRoute }));
@@ -29,13 +49,41 @@ export default function App() {
     setNavigation((current) => ({
       ...current,
       selectedBookId: bookId,
-      selectedChapterId: `${bookId}-chapter-1`,
+      selectedChapterId: findBook(bookId).currentChapterId,
       route: { name: 'Reader' },
     }));
   };
 
   const setVisualStyle = (visualStyle: VisualStyle) => {
     setNavigation((current) => ({ ...current, visualStyle }));
+  };
+
+  const beginMockImport = () => {
+    setPendingImportBook(importedBookTemplate);
+    navigate({ name: 'Style' });
+  };
+
+  const completeMockImport = () => {
+    const importedBook = pendingImportBook
+      ? { ...pendingImportBook, visualStyle: navigation.visualStyle }
+      : null;
+
+    if (importedBook) {
+      setShelfBooks((current) => {
+        const withoutExisting = current.filter((book) => book.id !== importedBook.id);
+        return [...withoutExisting, importedBook];
+      });
+      setNavigation((current) => ({
+        ...current,
+        selectedBookId: importedBook.id,
+        selectedChapterId: importedBook.currentChapterId,
+        route: { name: 'Reader' },
+      }));
+      setPendingImportBook(null);
+      return;
+    }
+
+    navigate({ name: 'Reader' });
   };
 
   const goBack = () => {
@@ -54,7 +102,12 @@ export default function App() {
         </View>
 
         {route.name === 'Shelf' ? (
-          <ShelfScreen onImport={() => navigate({ name: 'Import' })} onRead={openBook} />
+          <ShelfScreen
+            books={shelfBooks}
+            featuredBookId={currentBook.id}
+            onImport={() => navigate({ name: 'Import' })}
+            onRead={openBook}
+          />
         ) : (
           <View style={styles.header}>
             <Pressable accessibilityRole="button" onPress={goBack} style={styles.roundButton}>
@@ -75,16 +128,17 @@ export default function App() {
           </View>
         )}
 
-        {route.name === 'Import' && <ImportScreen onNext={() => navigate({ name: 'Style' })} />}
+        {route.name === 'Import' && <ImportScreen onNext={beginMockImport} />}
         {route.name === 'Style' && (
           <StyleScreen
             selected={navigation.visualStyle}
             onSelect={setVisualStyle}
-            onStart={() => navigate({ name: 'Reader' })}
+            onStart={completeMockImport}
           />
         )}
         {route.name === 'Reader' && (
           <ReaderScreen
+            chapter={currentChapter}
             visualStyle={navigation.visualStyle}
             showControls={showControls}
             onCloseControls={() => setShowControls(false)}
