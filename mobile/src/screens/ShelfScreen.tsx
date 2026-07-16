@@ -3,14 +3,20 @@ import { books } from '../data/mockData';
 import { colors } from '../theme/colors';
 import { sharedStyles } from '../theme/sharedStyles';
 
-export function ShelfScreen({ onImport, onRead }: { onImport: () => void; onRead: () => void }) {
+export function ShelfScreen({
+  onImport,
+  onRead,
+}: {
+  onImport: () => void;
+  onRead: (bookId: string) => void;
+}) {
   return (
     <ScrollView style={sharedStyles.screen} contentContainerStyle={sharedStyles.screenContent}>
       <View style={styles.shelfHeader}>
         <Text style={styles.logo}>阅境</Text>
       </View>
 
-      <Pressable accessibilityRole="button" onPress={onRead} style={styles.heroCard}>
+      <Pressable accessibilityRole="button" onPress={() => onRead('rain')} style={styles.heroCard}>
         <Text style={styles.heroEyebrow}>继续阅读</Text>
         <Text style={styles.heroTitle}>雨夜之后</Text>
         <Text style={styles.heroDescription}>上次读到清晨街道，阅读到 38%</Text>
@@ -31,7 +37,7 @@ export function ShelfScreen({ onImport, onRead }: { onImport: () => void; onRead
           <Pressable
             accessibilityRole="button"
             key={book.id}
-            onPress={onRead}
+            onPress={() => onRead(book.id)}
             style={[styles.bookCover, { backgroundColor: book.accent }]}
           >
             <View style={styles.bookShine} />

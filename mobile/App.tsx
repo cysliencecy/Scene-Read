@@ -1,29 +1,47 @@
 ﻿import { StatusBar } from 'expo-status-bar';
 import { useMemo, useState } from 'react';
 import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import {
+  getRouteTitle,
+  initialNavigationState,
+  type AppNavigationState,
+  type AppRoute,
+} from './src/navigation/routes';
 import { ImportScreen } from './src/screens/ImportScreen';
 import { ReaderScreen } from './src/screens/ReaderScreen';
 import { ShelfScreen } from './src/screens/ShelfScreen';
 import { StyleScreen } from './src/screens/StyleScreen';
 import { colors } from './src/theme/colors';
-import type { Screen, VisualStyle } from './src/types/app';
+import type { VisualStyle } from './src/types/app';
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('shelf');
-  const [visualStyle, setVisualStyle] = useState<VisualStyle>('写实');
+  const [navigation, setNavigation] = useState<AppNavigationState>(initialNavigationState);
   const [showControls, setShowControls] = useState(false);
+  const route = navigation.route;
 
-  const title = useMemo(() => {
-    if (screen === 'import') return '导入书籍';
-    if (screen === 'style') return '选择画面风格';
-    if (screen === 'reader') return '第一章 雨夜之后';
-    return '阅境';
-  }, [screen]);
+  const title = useMemo(() => getRouteTitle(route), [route]);
+
+  const navigate = (nextRoute: AppRoute) => {
+    setNavigation((current) => ({ ...current, route: nextRoute }));
+  };
+
+  const openBook = (bookId: string) => {
+    setNavigation((current) => ({
+      ...current,
+      selectedBookId: bookId,
+      selectedChapterId: `${bookId}-chapter-1`,
+      route: { name: 'Reader' },
+    }));
+  };
+
+  const setVisualStyle = (visualStyle: VisualStyle) => {
+    setNavigation((current) => ({ ...current, visualStyle }));
+  };
 
   const goBack = () => {
-    if (screen === 'reader') setScreen('shelf');
-    if (screen === 'style') setScreen('import');
-    if (screen === 'import') setScreen('shelf');
+    if (route.name === 'Reader') navigate({ name: 'Shelf' });
+    if (route.name === 'Style') navigate({ name: 'Import' });
+    if (route.name === 'Import') navigate({ name: 'Shelf' });
   };
 
   return (
@@ -35,15 +53,15 @@ export default function App() {
           <Text style={styles.statusText}>5G  ◐  ▰</Text>
         </View>
 
-        {screen === 'shelf' ? (
-          <ShelfScreen onImport={() => setScreen('import')} onRead={() => setScreen('reader')} />
+        {route.name === 'Shelf' ? (
+          <ShelfScreen onImport={() => navigate({ name: 'Import' })} onRead={openBook} />
         ) : (
           <View style={styles.header}>
             <Pressable accessibilityRole="button" onPress={goBack} style={styles.roundButton}>
               <Text style={styles.roundButtonText}>‹</Text>
             </Pressable>
             <Text style={styles.headerTitle}>{title}</Text>
-            {screen === 'reader' ? (
+            {route.name === 'Reader' ? (
               <Pressable
                 accessibilityRole="button"
                 onPress={() => setShowControls((value) => !value)}
@@ -57,17 +75,17 @@ export default function App() {
           </View>
         )}
 
-        {screen === 'import' && <ImportScreen onNext={() => setScreen('style')} />}
-        {screen === 'style' && (
+        {route.name === 'Import' && <ImportScreen onNext={() => navigate({ name: 'Style' })} />}
+        {route.name === 'Style' && (
           <StyleScreen
-            selected={visualStyle}
+            selected={navigation.visualStyle}
             onSelect={setVisualStyle}
-            onStart={() => setScreen('reader')}
+            onStart={() => navigate({ name: 'Reader' })}
           />
         )}
-        {screen === 'reader' && (
+        {route.name === 'Reader' && (
           <ReaderScreen
-            visualStyle={visualStyle}
+            visualStyle={navigation.visualStyle}
             showControls={showControls}
             onCloseControls={() => setShowControls(false)}
           />
