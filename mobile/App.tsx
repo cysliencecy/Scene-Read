@@ -1,19 +1,31 @@
-﻿import { StatusBar } from 'expo-status-bar';
-import { useMemo, useState } from 'react';
+import { StatusBar } from 'expo-status-bar';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import {
+  fetchBooks,
+  fetchChapter,
+  fetchGenerationTasks,
+  fetchSceneImages,
+} from './src/api/client';
 import {
   getRouteTitle,
   initialNavigationState,
   type AppNavigationState,
   type AppRoute,
 } from './src/navigation/routes';
-import { books as initialBooks, findBook, findChapter } from './src/data/mockData';
+import {
+  books as initialBooks,
+  findBook,
+  findChapter,
+  generationTasks as initialGenerationTasks,
+  sceneImages as initialSceneImages,
+} from './src/data/mockData';
 import { ImportScreen } from './src/screens/ImportScreen';
 import { ReaderScreen } from './src/screens/ReaderScreen';
 import { ShelfScreen } from './src/screens/ShelfScreen';
 import { StyleScreen } from './src/screens/StyleScreen';
 import { colors } from './src/theme/colors';
-import type { Book, VisualStyle } from './src/types/app';
+import type { Book, Chapter, GenerationTask, SceneImage, VisualStyle } from './src/types/app';
 
 const importedBookTemplate: Book = {
   id: 'island',
@@ -27,29 +39,94 @@ const importedBookTemplate: Book = {
 export default function App() {
   const [navigation, setNavigation] = useState<AppNavigationState>(initialNavigationState);
   const [shelfBooks, setShelfBooks] = useState<Book[]>(initialBooks);
+  const [chaptersById, setChaptersById] = useState<Record<string, Chapter>>({});
+  const [generationTasks, setGenerationTasks] = useState<GenerationTask[]>(initialGenerationTasks);
+  const [sceneImages, setSceneImages] = useState<SceneImage[]>(initialSceneImages);
+  const [apiStatus, setApiStatus] = useState<'loading' | 'connected' | 'fallback'>('loading');
   const [pendingImportBook, setPendingImportBook] = useState<Book | null>(null);
   const [showControls, setShowControls] = useState(false);
   const route = navigation.route;
+
   const currentBook = useMemo(
     () => shelfBooks.find((book) => book.id === navigation.selectedBookId) ?? findBook(navigation.selectedBookId),
     [navigation.selectedBookId, shelfBooks],
   );
   const currentChapter = useMemo(
-    () => findChapter(navigation.selectedChapterId),
-    [navigation.selectedChapterId],
+    () => chaptersById[navigation.selectedChapterId] ?? findChapter(navigation.selectedChapterId),
+    [chaptersById, navigation.selectedChapterId],
   );
 
   const title = useMemo(() => getRouteTitle(route, currentChapter.title), [currentChapter.title, route]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadInitialApiData() {
+      try {
+        const [apiBooks, apiTasks, apiImages] = await Promise.all([
+          fetchBooks(),
+          fetchGenerationTasks(),
+          fetchSceneImages(),
+        ]);
+
+        if (cancelled) return;
+        setShelfBooks(apiBooks);
+        setGenerationTasks(apiTasks);
+        setSceneImages(apiImages);
+        setApiStatus('connected');
+      } catch {
+        if (cancelled) return;
+        setShelfBooks(initialBooks);
+        setGenerationTasks(initialGenerationTasks);
+        setSceneImages(initialSceneImages);
+        setApiStatus('fallback');
+      }
+    }
+
+    loadInitialApiData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadChapter() {
+      try {
+        const apiChapter = await fetchChapter(navigation.selectedChapterId);
+        if (cancelled) return;
+        setChaptersById((current) => ({ ...current, [apiChapter.id]: apiChapter }));
+        setApiStatus('connected');
+      } catch {
+        if (cancelled) return;
+        setChaptersById((current) => ({
+          ...current,
+          [navigation.selectedChapterId]: findChapter(navigation.selectedChapterId),
+        }));
+        setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
+      }
+    }
+
+    loadChapter();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [navigation.selectedChapterId]);
 
   const navigate = (nextRoute: AppRoute) => {
     setNavigation((current) => ({ ...current, route: nextRoute }));
   };
 
   const openBook = (bookId: string) => {
+    const book = shelfBooks.find((item) => item.id === bookId) ?? findBook(bookId);
+
     setNavigation((current) => ({
       ...current,
-      selectedBookId: bookId,
-      selectedChapterId: findBook(bookId).currentChapterId,
+      selectedBookId: book.id,
+      selectedChapterId: book.currentChapterId,
       route: { name: 'Reader' },
     }));
   };
@@ -139,10 +216,17 @@ export default function App() {
         {route.name === 'Reader' && (
           <ReaderScreen
             chapter={currentChapter}
+            generationTasks={generationTasks}
+            sceneImages={sceneImages}
             visualStyle={navigation.visualStyle}
             showControls={showControls}
             onCloseControls={() => setShowControls(false)}
           />
+        )}
+        {apiStatus === 'fallback' && (
+          <View style={styles.apiBadge}>
+            <Text style={styles.apiBadgeText}>Mock fallback</Text>
+          </View>
         )}
       </View>
     </SafeAreaView>
@@ -209,5 +293,19 @@ const styles = StyleSheet.create({
   },
   headerSpacer: {
     width: 38,
+  },
+  apiBadge: {
+    position: 'absolute',
+    right: 14,
+    bottom: 14,
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    backgroundColor: 'rgba(32,54,48,0.82)',
+  },
+  apiBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '800',
   },
 });

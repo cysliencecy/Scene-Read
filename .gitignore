@@ -1,6 +1,9 @@
 ﻿# Dependencies
 node_modules/
 
+# Build output
+dist/
+
 # Expo / React Native local state
 .expo/
 expo-web.out.log
@@ -19,4 +22,5 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
 

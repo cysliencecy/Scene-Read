@@ -8,9 +8,8 @@ import {
 } from '../components/ReaderControlsSheet';
 import { ReaderParagraph } from '../components/ReaderParagraph';
 import { SceneImage } from '../components/SceneImage';
-import { findSceneImage, findTask } from '../data/mockData';
 import { colors } from '../theme/colors';
-import type { Chapter, VisualStyle } from '../types/app';
+import type { Chapter, GenerationTask, SceneImage as SceneImageData, VisualStyle } from '../types/app';
 
 const readerThemeTokens: Record<
   ReaderTheme,
@@ -57,11 +56,15 @@ const fontSizeTokens: Record<ReaderFontSize, { paragraph: number; lineHeight: nu
 
 export function ReaderScreen({
   chapter,
+  generationTasks,
+  sceneImages,
   visualStyle,
   showControls,
   onCloseControls,
 }: {
   chapter: Chapter;
+  generationTasks: GenerationTask[];
+  sceneImages: SceneImageData[];
   visualStyle: VisualStyle;
   showControls: boolean;
   onCloseControls: () => void;
@@ -100,12 +103,12 @@ export function ReaderScreen({
           }
 
           if (block.type === 'scene-placeholder') {
-            const task = findTask(block.taskId);
+            const task = generationTasks.find((item) => item.id === block.taskId);
             if (!task) return null;
             return <GeneratingSceneCard key={block.id} progress={task.progress} label={task.label} />;
           }
 
-          const image = findSceneImage(block.imageId);
+          const image = sceneImages.find((item) => item.id === block.imageId);
           if (!image) return null;
           return <SceneImage key={block.id} variant={image.variant} />;
         })}
