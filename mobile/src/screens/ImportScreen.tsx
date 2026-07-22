@@ -1,8 +1,19 @@
-﻿import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import type { ImportedBookDraft } from '../import/bookImport';
 import { colors } from '../theme/colors';
 import { sharedStyles } from '../theme/sharedStyles';
 
-export function ImportScreen({ onNext }: { onNext: () => void }) {
+export function ImportScreen({
+  error,
+  importedDraft,
+  isImporting,
+  onPickBook,
+}: {
+  error: string | null;
+  importedDraft: ImportedBookDraft | null;
+  isImporting: boolean;
+  onPickBook: () => void;
+}) {
   return (
     <View style={[sharedStyles.screen, styles.centerScreen]}>
       <View style={styles.importPanel}>
@@ -11,17 +22,33 @@ export function ImportScreen({ onNext }: { onNext: () => void }) {
         </View>
         <Text style={styles.importTitle}>选择一本书</Text>
         <Text style={styles.importDescription}>支持 TXT / EPUB</Text>
-        <View style={styles.mockFile}>
-          <Text style={styles.mockFileName}>岛屿来信.epub</Text>
-          <Text style={styles.mockFileMeta}>模拟本地导入 · EPUB</Text>
+        <View style={styles.fileCard}>
+          <Text style={styles.fileName}>{importedDraft?.fileName ?? '尚未选择文件'}</Text>
+          <Text style={styles.fileMeta}>
+            {importedDraft
+              ? `${importedDraft.fileType} · ${importedDraft.chapters.length} 章 · ${formatFileSize(importedDraft.fileSize)}`
+              : '从手机文件中选择一本本地书'}
+          </Text>
         </View>
-        <Pressable accessibilityRole="button" onPress={onNext} style={sharedStyles.primaryButton}>
-          <Text style={sharedStyles.primaryButtonText}>使用该书继续</Text>
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        <Pressable
+          accessibilityRole="button"
+          disabled={isImporting}
+          onPress={onPickBook}
+          style={[sharedStyles.primaryButton, isImporting && styles.disabledButton]}
+        >
+          <Text style={sharedStyles.primaryButtonText}>{isImporting ? '正在解析' : '选择本地书'}</Text>
         </Pressable>
       </View>
     </View>
   );
 }
+
+const formatFileSize = (size?: number) => {
+  if (!size) return '大小未知';
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+};
 
 const styles = StyleSheet.create({
   centerScreen: { paddingHorizontal: 22, justifyContent: 'center' },
@@ -48,7 +75,7 @@ const styles = StyleSheet.create({
   importIconText: { color: '#fff', fontSize: 34, fontWeight: '700' },
   importTitle: { color: colors.ink, fontSize: 22, fontWeight: '800' },
   importDescription: { marginTop: 10, color: colors.muted, fontSize: 14 },
-  mockFile: {
+  fileCard: {
     width: '100%',
     borderRadius: 16,
     borderWidth: 1,
@@ -58,6 +85,8 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     marginTop: 18,
   },
-  mockFileName: { color: colors.ink, fontSize: 14, fontWeight: '800' },
-  mockFileMeta: { color: colors.muted, fontSize: 12, marginTop: 4 },
+  fileName: { color: colors.ink, fontSize: 14, fontWeight: '800' },
+  fileMeta: { color: colors.muted, fontSize: 12, marginTop: 4 },
+  errorText: { color: '#9d3b34', fontSize: 12, lineHeight: 18, marginTop: 12, textAlign: 'center' },
+  disabledButton: { opacity: 0.72 },
 });

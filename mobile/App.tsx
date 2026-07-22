@@ -20,21 +20,13 @@ import {
   generationTasks as initialGenerationTasks,
   sceneImages as initialSceneImages,
 } from './src/data/mockData';
+import { pickAndParseBook, type ImportedBookDraft } from './src/import/bookImport';
 import { ImportScreen } from './src/screens/ImportScreen';
 import { ReaderScreen } from './src/screens/ReaderScreen';
 import { ShelfScreen } from './src/screens/ShelfScreen';
 import { StyleScreen } from './src/screens/StyleScreen';
 import { colors } from './src/theme/colors';
 import type { Book, Chapter, GenerationTask, SceneImage, VisualStyle } from './src/types/app';
-
-const importedBookTemplate: Book = {
-  id: 'island',
-  title: '岛屿来信',
-  progress: '新导入',
-  accent: '#426f76',
-  currentChapterId: 'island-chapter-1',
-  lastReadLabel: '第一章 海风里的信',
-};
 
 export default function App() {
   const [navigation, setNavigation] = useState<AppNavigationState>(initialNavigationState);
@@ -43,8 +35,12 @@ export default function App() {
   const [generationTasks, setGenerationTasks] = useState<GenerationTask[]>(initialGenerationTasks);
   const [sceneImages, setSceneImages] = useState<SceneImage[]>(initialSceneImages);
   const [apiStatus, setApiStatus] = useState<'loading' | 'connected' | 'fallback'>('loading');
-  const [pendingImportBook, setPendingImportBook] = useState<Book | null>(null);
+  const [pendingImportDraft, setPendingImportDraft] = useState<ImportedBookDraft | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
   const [showControls, setShowControls] = useState(false);
+  const [isEditingShelf, setIsEditingShelf] = useState(false);
+  const [selectedImportedBookIds, setSelectedImportedBookIds] = useState<string[]>([]);
   const route = navigation.route;
 
   const currentBook = useMemo(
@@ -70,7 +66,7 @@ export default function App() {
         ]);
 
         if (cancelled) return;
-        setShelfBooks(apiBooks);
+        setShelfBooks(apiBooks.length > 0 ? apiBooks : initialBooks);
         setGenerationTasks(apiTasks);
         setSceneImages(apiImages);
         setApiStatus('connected');
@@ -94,6 +90,10 @@ export default function App() {
     let cancelled = false;
 
     async function loadChapter() {
+      if (chaptersById[navigation.selectedChapterId]) {
+        return;
+      }
+
       try {
         const apiChapter = await fetchChapter(navigation.selectedChapterId);
         if (cancelled) return;
@@ -101,10 +101,13 @@ export default function App() {
         setApiStatus('connected');
       } catch {
         if (cancelled) return;
-        setChaptersById((current) => ({
-          ...current,
-          [navigation.selectedChapterId]: findChapter(navigation.selectedChapterId),
-        }));
+        setChaptersById((current) => {
+          if (current[navigation.selectedChapterId]) return current;
+          return {
+            ...current,
+            [navigation.selectedChapterId]: findChapter(navigation.selectedChapterId),
+          };
+        });
         setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
       }
     }
@@ -114,7 +117,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [navigation.selectedChapterId]);
+  }, [chaptersById, navigation.selectedChapterId]);
 
   const navigate = (nextRoute: AppRoute) => {
     setNavigation((current) => ({ ...current, route: nextRoute }));
@@ -131,24 +134,112 @@ export default function App() {
     }));
   };
 
+  const clearShelfEditing = () => {
+    setIsEditingShelf(false);
+    setSelectedImportedBookIds([]);
+  };
+
+  const toggleShelfEditing = () => {
+    setIsEditingShelf((current) => {
+      if (current) {
+        setSelectedImportedBookIds([]);
+      }
+
+      return !current;
+    });
+  };
+
+  const toggleBookSelection = (bookId: string) => {
+    if (!bookId.startsWith('import-')) return;
+
+    setSelectedImportedBookIds((current) => {
+      if (current.includes(bookId)) {
+        return current.filter((selectedBookId) => selectedBookId !== bookId);
+      }
+
+      return [...current, bookId];
+    });
+  };
+
+  const removeSelectedImportedBooks = () => {
+    const selectedIds = new Set(selectedImportedBookIds.filter((bookId) => bookId.startsWith('import-')));
+    if (selectedIds.size === 0) return;
+
+    setShelfBooks((current) => {
+      const nextBooks = current.filter((book) => !selectedIds.has(book.id));
+      const fallbackBook = nextBooks[0] ?? initialBooks[0];
+
+      setNavigation((currentNavigation) => {
+        if (!selectedIds.has(currentNavigation.selectedBookId)) {
+          return currentNavigation;
+        }
+
+        return {
+          ...currentNavigation,
+          selectedBookId: fallbackBook.id,
+          selectedChapterId: fallbackBook.currentChapterId,
+          route: { name: 'Shelf' },
+        };
+      });
+
+      return nextBooks;
+    });
+
+    setChaptersById((current) => {
+      const next: Record<string, Chapter> = {};
+      Object.entries(current).forEach(([chapterId, chapter]) => {
+        if (!selectedIds.has(chapter.bookId)) {
+          next[chapterId] = chapter;
+        }
+      });
+      return next;
+    });
+
+    clearShelfEditing();
+  };
   const setVisualStyle = (visualStyle: VisualStyle) => {
     setNavigation((current) => ({ ...current, visualStyle }));
   };
 
-  const beginMockImport = () => {
-    setPendingImportBook(importedBookTemplate);
-    navigate({ name: 'Style' });
+  const beginFileImport = async () => {
+    clearShelfEditing();
+    setImportError(null);
+    setIsImporting(true);
+
+    try {
+      const draft = await pickAndParseBook();
+      if (!draft) return;
+
+      if (draft.chapters.length === 0 || draft.chapters[0].blocks.length === 0) {
+        setImportError('No readable text found. Please choose a TXT or EPUB file.');
+        return;
+      }
+
+      setPendingImportDraft(draft);
+      navigate({ name: 'Style' });
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : 'File parsing failed');
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const completeMockImport = () => {
-    const importedBook = pendingImportBook
-      ? { ...pendingImportBook, visualStyle: navigation.visualStyle }
-      : null;
+    const draft = pendingImportDraft;
 
-    if (importedBook) {
+    if (draft) {
+      const importedBook = { ...draft.book, visualStyle: navigation.visualStyle };
+      const importedChapters = draft.chapters;
       setShelfBooks((current) => {
         const withoutExisting = current.filter((book) => book.id !== importedBook.id);
         return [...withoutExisting, importedBook];
+      });
+      setChaptersById((current) => {
+        const next = { ...current };
+        importedChapters.forEach((chapter) => {
+          next[chapter.id] = chapter;
+        });
+        return next;
       });
       setNavigation((current) => ({
         ...current,
@@ -156,7 +247,7 @@ export default function App() {
         selectedChapterId: importedBook.currentChapterId,
         route: { name: 'Reader' },
       }));
-      setPendingImportBook(null);
+      setPendingImportDraft(null);
       return;
     }
 
@@ -175,20 +266,28 @@ export default function App() {
       <View style={styles.phoneFrame}>
         <View style={styles.statusBar}>
           <Text style={styles.statusText}>9:41</Text>
-          <Text style={styles.statusText}>5G  ◐  ▰</Text>
+          <Text style={styles.statusText}>5G</Text>
         </View>
 
         {route.name === 'Shelf' ? (
           <ShelfScreen
             books={shelfBooks}
             featuredBookId={currentBook.id}
-            onImport={() => navigate({ name: 'Import' })}
+            isEditingShelf={isEditingShelf}
+            selectedBookIds={selectedImportedBookIds}
+            onImport={() => {
+              clearShelfEditing();
+              navigate({ name: 'Import' });
+            }}
+            onRemoveSelectedImportedBooks={removeSelectedImportedBooks}
             onRead={openBook}
+            onToggleBookSelection={toggleBookSelection}
+            onToggleEditingShelf={toggleShelfEditing}
           />
         ) : (
           <View style={styles.header}>
             <Pressable accessibilityRole="button" onPress={goBack} style={styles.roundButton}>
-              <Text style={styles.roundButtonText}>‹</Text>
+              <Text style={styles.roundButtonText}>{'<'}</Text>
             </Pressable>
             <Text style={styles.headerTitle}>{title}</Text>
             {route.name === 'Reader' ? (
@@ -205,7 +304,14 @@ export default function App() {
           </View>
         )}
 
-        {route.name === 'Import' && <ImportScreen onNext={beginMockImport} />}
+        {route.name === 'Import' && (
+          <ImportScreen
+            error={importError}
+            importedDraft={pendingImportDraft}
+            isImporting={isImporting}
+            onPickBook={beginFileImport}
+          />
+        )}
         {route.name === 'Style' && (
           <StyleScreen
             selected={navigation.visualStyle}

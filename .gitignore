@@ -3,6 +3,10 @@ node_modules/
 
 # Build output
 dist/
+.tmp/
+worker/.tmp/
+__pycache__/
+*.py[cod]
 
 # Expo / React Native local state
 .expo/

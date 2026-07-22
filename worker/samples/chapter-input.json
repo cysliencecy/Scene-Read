@@ -1,0 +1,23 @@
+{
+  "taskId": "task-sample-1",
+  "bookId": "book-sample",
+  "chapterId": "chapter-sample-1",
+  "chapterTitle": "第一章 为难时相遇",
+  "blocks": [
+    {
+      "id": "p1",
+      "type": "paragraph",
+      "text": "“呼……呼……”森冷的秋季夜里，街道上的风很冷，路灯把人影拉得很长。"
+    },
+    {
+      "id": "p2",
+      "type": "paragraph",
+      "text": "她推开门，房间里只剩下一盏灯，窗外的雨声还没有停。"
+    },
+    {
+      "id": "p3",
+      "type": "paragraph",
+      "text": "他没有回答，只是低头看着手机屏幕。"
+    }
+  ]
+}
