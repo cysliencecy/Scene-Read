@@ -1,0 +1,98 @@
+[
+  {
+    "taskId": "task-t18-rain-street",
+    "bookId": "t18-book",
+    "chapterId": "t18-rain-street",
+    "chapterTitle": "雨夜街口",
+    "expected": "应选择街口、雨夜、路灯等明确环境段落，不应选择争执情绪段落。",
+    "blocks": [
+      {
+        "id": "rain-p1",
+        "type": "paragraph",
+        "text": "雨从傍晚一直落到深夜，街口的路灯被水汽晕成一团，她撑着伞站在便利店门外，看车灯一辆辆从积水里划过去。"
+      },
+      {
+        "id": "rain-p2",
+        "type": "paragraph",
+        "text": "电话那头沉默了几秒，他终于说出那句迟来的道歉。她没有回答，只把伞柄握得更紧。"
+      },
+      {
+        "id": "rain-p3",
+        "type": "paragraph",
+        "text": "一阵风掀起广告牌下的塑料布，雨点打在铁皮棚上，声音密得像一面墙。"
+      }
+    ]
+  },
+  {
+    "taskId": "task-t18-office",
+    "bookId": "t18-book",
+    "chapterId": "t18-office",
+    "chapterTitle": "办公室清晨",
+    "expected": "应选择办公室、玻璃墙、晨光等空间环境，不应只因人物紧张而选段。",
+    "blocks": [
+      {
+        "id": "office-p1",
+        "type": "paragraph",
+        "text": "清晨七点的办公室还没有开灯，整面玻璃墙映着灰蓝色天光，会议桌上散着昨晚没收完的文件。"
+      },
+      {
+        "id": "office-p2",
+        "type": "paragraph",
+        "text": "她翻到最后一页，发现签名的位置空着，心里忽然沉了一下。"
+      },
+      {
+        "id": "office-p3",
+        "type": "paragraph",
+        "text": "电梯门在走廊尽头打开，脚步声从空旷的地毯上慢慢靠近。"
+      }
+    ]
+  },
+  {
+    "taskId": "task-t18-car",
+    "bookId": "t18-book",
+    "chapterId": "t18-car",
+    "chapterTitle": "车内夜行",
+    "expected": "应选择车内、城市高架、雨刷等可视场景。",
+    "blocks": [
+      {
+        "id": "car-p1",
+        "type": "paragraph",
+        "text": "车子驶上高架，雨刷一下一下推开挡风玻璃上的水，远处写字楼的灯像被揉散的星点。"
+      },
+      {
+        "id": "car-p2",
+        "type": "paragraph",
+        "text": "他坐在后排，没有看她，只问了一句今晚还回不回去。"
+      },
+      {
+        "id": "car-p3",
+        "type": "paragraph",
+        "text": "司机把车停在医院侧门，白色灯箱照着潮湿的台阶，门口只有两三个等车的人。"
+      }
+    ]
+  },
+  {
+    "taskId": "task-t18-memory",
+    "bookId": "t18-book",
+    "chapterId": "t18-memory",
+    "chapterTitle": "回忆段落",
+    "expected": "应谨慎处理，除非有明确空间，不应因为回忆和情绪转折强行选图。",
+    "blocks": [
+      {
+        "id": "memory-p1",
+        "type": "paragraph",
+        "text": "她忽然想起三年前那个下午，想起自己曾经以为不会改变的承诺。"
+      },
+      {
+        "id": "memory-p2",
+        "type": "paragraph",
+        "text": "那种迟来的委屈像潮水一样涌上来，她几乎说不出话。"
+      },
+      {
+        "id": "memory-p3",
+        "type": "paragraph",
+        "text": "窗外的天色暗下来，客厅里只剩电视屏幕的冷光，她把杯子放回茶几，没有再看他。"
+      }
+    ]
+  }
+]
