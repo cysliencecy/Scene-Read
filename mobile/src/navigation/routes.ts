@@ -1,12 +1,13 @@
 import type { VisualStyle } from '../types/app';
 
-export type RouteName = 'Shelf' | 'Import' | 'Style' | 'Reader';
+export type RouteName = 'Shelf' | 'Import' | 'Style' | 'Reader' | 'SceneDebug';
 
 export type AppRoute =
   | { name: 'Shelf' }
   | { name: 'Import' }
   | { name: 'Style' }
-  | { name: 'Reader' };
+  | { name: 'Reader' }
+  | { name: 'SceneDebug' };
 
 export type AppNavigationState = {
   route: AppRoute;

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 
 class ChapterBlock(TypedDict):
@@ -27,6 +27,15 @@ class SceneCandidate:
     reason: str
     sourceText: str
     promptDraft: str
+    locationChange: str = ""
+    confidence: float = 0.0
+
+
+@dataclass(frozen=True)
+class WorkerLog:
+    level: Literal["info", "warning", "error"]
+    message: str
+    data: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -36,3 +45,5 @@ class WorkerResult:
     chapterId: str
     status: Literal["completed"]
     candidates: list[SceneCandidate]
+    provider: Literal["openai", "heuristic"]
+    logs: list[WorkerLog]

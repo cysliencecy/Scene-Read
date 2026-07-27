@@ -168,18 +168,21 @@ export const sceneImages: SceneImage[] = [
     chapterId: 'rain-chapter-1',
     variant: 'street',
     prompt: '雨后清晨街道，便利店灯光，湿润路面，安静现实主义风格',
+    imageUrl: 'https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?auto=format&fit=crop&w=900&q=80',
   },
   {
     id: 'rain-image-2',
     chapterId: 'rain-chapter-1',
     variant: 'office',
     prompt: '现代公司前台与走廊，清晨冷色光线，安静压迫感',
+    imageUrl: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=900&q=80',
   },
   {
     id: 'street-image-1',
     chapterId: 'street-chapter-1',
     variant: 'office',
     prompt: '旧街书店室内，雨夜木门，旧书箱，温暖灯光',
+    imageUrl: 'https://images.unsplash.com/photo-1524995997946-a1c2e315a42f?auto=format&fit=crop&w=900&q=80',
   },
 ];
 

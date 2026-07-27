@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
+import urllib.parse
 import urllib.request
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
-from .processor import process_chapter
+from .image_generator import generate_images_for_candidates
+from .processor import process_chapter, result_to_dict
 from .types import ChapterPayload
 
 
@@ -19,9 +23,45 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _request_json(url: str, method: str = "GET", payload: object | None = None) -> Any:
+    body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _fetch_task_payload(api_url: str, task_id: str) -> ChapterPayload:
+    encoded_task_id = urllib.parse.quote(task_id, safe="")
+    url = f"{api_url.rstrip('/')}/worker/tasks/{encoded_task_id}/chapter-payload"
+    return _request_json(url)["data"]
+
+
+def _patch_task(api_url: str, task_id: str, payload: object) -> None:
+    encoded_task_id = urllib.parse.quote(task_id, safe="")
+    url = f"{api_url.rstrip('/')}/worker/tasks/{encoded_task_id}"
+    _request_json(url, method="PATCH", payload=payload)
+
+
 def _post_to_api(api_url: str, payload: object) -> None:
     url = f"{api_url.rstrip('/')}/worker/scene-candidates"
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    sanitized_payload = payload
+    if isinstance(payload, dict) and isinstance(payload.get("generatedImages"), list):
+        sanitized_payload = {
+            **payload,
+            "generatedImages": [
+                {key: value for key, value in image.items() if key != "imageBase64"}
+                if isinstance(image, dict)
+                else image
+                for image in payload["generatedImages"]
+            ],
+        }
+    body = json.dumps(sanitized_payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         url,
         data=body,
@@ -33,22 +73,105 @@ def _post_to_api(api_url: str, payload: object) -> None:
         response.read()
 
 
+def _post_scene_image_to_api(api_url: str, payload: object) -> None:
+    url = f"{api_url.rstrip('/')}/worker/scene-images"
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    with urllib.request.urlopen(request, timeout=30) as response:
+        response.read()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Process one SceneReader chapter payload.")
-    parser.add_argument("--input", required=True, help="Path to chapter input JSON.")
+    parser.add_argument("--input", help="Path to chapter input JSON.")
+    parser.add_argument("--task-id", help="Generation task id to load from the API.")
     parser.add_argument("--output", help="Optional path to write worker result JSON.")
     parser.add_argument("--api-url", help="Optional API base URL for result callback.")
+    parser.add_argument("--generate-images", action="store_true", help="Generate scene images for selected candidates.")
+    parser.add_argument("--image-provider", help="Image provider: pollinations or mock-svg.")
+    parser.add_argument("--max-images", type=int, default=1, help="Maximum scene images to generate.")
+    parser.add_argument(
+        "--provider",
+        choices=["auto", "openai", "heuristic"],
+        default="auto",
+        help="Scene recognition provider. auto uses Kimi/OpenAI-compatible AI when MOONSHOT_API_KEY exists, otherwise heuristic fallback.",
+    )
     args = parser.parse_args()
+    started_at = time.perf_counter()
 
-    result = asdict(process_chapter(_read_json(Path(args.input))))
+    if args.task_id and not args.api_url:
+        parser.error("--task-id requires --api-url")
+    if not args.input and not args.task_id:
+        parser.error("Either --input or --task-id is required")
 
-    if args.output:
-        _write_json(Path(args.output), result)
+    try:
+        payload = _fetch_task_payload(args.api_url, args.task_id) if args.task_id else _read_json(Path(args.input))
+        if args.task_id:
+            _patch_task(
+                args.api_url,
+                args.task_id,
+                {"status": "recognizing", "progress": 20, "label": "正在识别章节场景"},
+            )
 
-    if args.api_url:
-        _post_to_api(args.api_url, result)
+        processed = process_chapter(payload, provider=args.provider)
+        result = result_to_dict(processed)
 
-    if not args.output:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if args.generate_images:
+            if args.task_id:
+                _patch_task(
+                    args.api_url,
+                    args.task_id,
+                    {"status": "generating", "progress": 60, "label": "正在生成场景图"},
+                )
+            generated_images = generate_images_for_candidates(
+                processed.candidates,
+                provider=args.image_provider,
+                max_images=args.max_images,
+            )
+            result["generatedImages"] = [asdict(image) for image in generated_images]
+
+        if args.output:
+            _write_json(Path(args.output), result)
+
+        if args.api_url:
+            _post_to_api(args.api_url, result)
+            for image in result.get("generatedImages", []):
+                _post_scene_image_to_api(args.api_url, image)
+            if args.task_id:
+                _patch_task(
+                    args.api_url,
+                    args.task_id,
+                    {
+                        "status": "completed",
+                        "progress": 100,
+                        "label": "场景图已生成",
+                        "provider": processed.provider,
+                        "durationMs": int((time.perf_counter() - started_at) * 1000),
+                    },
+                )
+
+        if not args.output:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+    except Exception as error:
+        if args.task_id and args.api_url:
+            _patch_task(
+                args.api_url,
+                args.task_id,
+                {
+                    "status": "failed",
+                    "progress": 0,
+                    "label": "场景图生成失败",
+                    "errorMessage": str(error),
+                    "provider": args.provider,
+                    "durationMs": int((time.perf_counter() - started_at) * 1000),
+                },
+            )
+        raise
 
     return 0

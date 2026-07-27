@@ -2,38 +2,93 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import {
+  createBook,
+  createChapter,
+  deleteBook,
   fetchBooks,
   fetchChapter,
   fetchGenerationTasks,
   fetchSceneImages,
+  fetchSceneCandidates,
+  retryGenerationTask,
+  submitChapterGenerationTask,
 } from './src/api/client';
+import { pickAndParseBook, type ImportedBookDraft } from './src/import/bookImport';
 import {
   getRouteTitle,
   initialNavigationState,
   type AppNavigationState,
   type AppRoute,
 } from './src/navigation/routes';
-import {
-  books as initialBooks,
-  findBook,
-  findChapter,
-  generationTasks as initialGenerationTasks,
-  sceneImages as initialSceneImages,
-} from './src/data/mockData';
-import { pickAndParseBook, type ImportedBookDraft } from './src/import/bookImport';
 import { ImportScreen } from './src/screens/ImportScreen';
 import { ReaderScreen } from './src/screens/ReaderScreen';
+import { SceneDebugScreen } from './src/screens/SceneDebugScreen';
 import { ShelfScreen } from './src/screens/ShelfScreen';
 import { StyleScreen } from './src/screens/StyleScreen';
 import { colors } from './src/theme/colors';
-import type { Book, Chapter, GenerationTask, SceneImage, VisualStyle } from './src/types/app';
+import type { Book, Chapter, ChapterBlock, GenerationTask, SceneCandidate, SceneImage, VisualStyle } from './src/types/app';
+
+const POLLING_INTERVAL_MS = 3000;
+
+const isPendingTask = (task: GenerationTask) =>
+  task.status === 'queued' || task.status === 'recognizing' || task.status === 'generating';
+
+const getFallbackInsertAfterBlockId = (blocks: ChapterBlock[]) => {
+  const paragraphIds = blocks.filter((block) => block.type === 'paragraph').map((block) => block.id);
+  if (paragraphIds.length === 0) return null;
+  return paragraphIds[Math.min(1, paragraphIds.length - 1)];
+};
+
+const withReaderGeneratedBlocks = (
+  chapter: Chapter | null,
+  tasks: GenerationTask[],
+  images: SceneImage[],
+): Chapter | null => {
+  if (!chapter) return null;
+
+  const chapterImages = images.filter((image) => image.chapterId === chapter.id);
+  const chapterTasks = tasks.filter((task) => task.chapterId === chapter.id);
+  const fallbackBlockId = getFallbackInsertAfterBlockId(chapter.blocks);
+  const pendingTask = chapterTasks.find(isPendingTask);
+  const imageIds = new Set(chapterImages.map((image) => image.id));
+  const taskIds = new Set(chapterTasks.map((task) => task.id));
+  const hasInlineImage = chapter.blocks.some((block) => block.type === 'scene-image' && imageIds.has(block.imageId));
+  const hasInlineTask = chapter.blocks.some((block) => block.type === 'scene-placeholder' && taskIds.has(block.taskId));
+
+  if (hasInlineImage || hasInlineTask || (!fallbackBlockId && chapterImages.length === 0 && !pendingTask)) {
+    return chapter;
+  }
+
+  const blocks: ChapterBlock[] = [];
+  chapter.blocks.forEach((block) => {
+    blocks.push(block);
+    if (block.type !== 'paragraph') return;
+
+    chapterImages
+      .filter((image) => image.sourceBlockId === block.id)
+      .forEach((image) => blocks.push({ id: `${image.id}-block`, type: 'scene-image', imageId: image.id }));
+
+    if (!hasInlineImage && block.id === fallbackBlockId) {
+      chapterImages
+        .filter((image) => !image.sourceBlockId)
+        .forEach((image) => blocks.push({ id: `${image.id}-fallback-block`, type: 'scene-image', imageId: image.id }));
+    }
+
+    if (!hasInlineTask && pendingTask && chapterImages.length === 0 && block.id === fallbackBlockId) {
+      blocks.push({ id: `${pendingTask.id}-block`, type: 'scene-placeholder', taskId: pendingTask.id });
+    }
+  });
+
+  return { ...chapter, blocks };
+};
 
 export default function App() {
   const [navigation, setNavigation] = useState<AppNavigationState>(initialNavigationState);
-  const [shelfBooks, setShelfBooks] = useState<Book[]>(initialBooks);
+  const [shelfBooks, setShelfBooks] = useState<Book[]>([]);
   const [chaptersById, setChaptersById] = useState<Record<string, Chapter>>({});
-  const [generationTasks, setGenerationTasks] = useState<GenerationTask[]>(initialGenerationTasks);
-  const [sceneImages, setSceneImages] = useState<SceneImage[]>(initialSceneImages);
+  const [generationTasks, setGenerationTasks] = useState<GenerationTask[]>([]);
+  const [sceneImages, setSceneImages] = useState<SceneImage[]>([]);
+  const [sceneCandidates, setSceneCandidates] = useState<SceneCandidate[]>([]);
   const [apiStatus, setApiStatus] = useState<'loading' | 'connected' | 'fallback'>('loading');
   const [pendingImportDraft, setPendingImportDraft] = useState<ImportedBookDraft | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -43,16 +98,19 @@ export default function App() {
   const [selectedImportedBookIds, setSelectedImportedBookIds] = useState<string[]>([]);
   const route = navigation.route;
 
-  const currentBook = useMemo(
-    () => shelfBooks.find((book) => book.id === navigation.selectedBookId) ?? findBook(navigation.selectedBookId),
-    [navigation.selectedBookId, shelfBooks],
-  );
+  const currentBook = useMemo(() => {
+    if (shelfBooks.length === 0) return null;
+    return shelfBooks.find((book) => book.id === navigation.selectedBookId) ?? shelfBooks[0];
+  }, [navigation.selectedBookId, shelfBooks]);
   const currentChapter = useMemo(
-    () => chaptersById[navigation.selectedChapterId] ?? findChapter(navigation.selectedChapterId),
+    () => chaptersById[navigation.selectedChapterId] ?? null,
     [chaptersById, navigation.selectedChapterId],
   );
-
-  const title = useMemo(() => getRouteTitle(route, currentChapter.title), [currentChapter.title, route]);
+  const renderedChapter = useMemo(
+    () => withReaderGeneratedBlocks(currentChapter, generationTasks, sceneImages),
+    [currentChapter, generationTasks, sceneImages],
+  );
+  const title = useMemo(() => getRouteTitle(route, currentChapter?.title), [currentChapter?.title, route]);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,15 +124,17 @@ export default function App() {
         ]);
 
         if (cancelled) return;
-        setShelfBooks(apiBooks.length > 0 ? apiBooks : initialBooks);
+        setShelfBooks(apiBooks);
         setGenerationTasks(apiTasks);
         setSceneImages(apiImages);
+        setSceneCandidates([]);
         setApiStatus('connected');
       } catch {
         if (cancelled) return;
-        setShelfBooks(initialBooks);
-        setGenerationTasks(initialGenerationTasks);
-        setSceneImages(initialSceneImages);
+        setShelfBooks([]);
+        setGenerationTasks([]);
+        setSceneImages([]);
+        setSceneCandidates([]);
         setApiStatus('fallback');
       }
     }
@@ -90,9 +150,7 @@ export default function App() {
     let cancelled = false;
 
     async function loadChapter() {
-      if (chaptersById[navigation.selectedChapterId]) {
-        return;
-      }
+      if (!navigation.selectedChapterId || chaptersById[navigation.selectedChapterId]) return;
 
       try {
         const apiChapter = await fetchChapter(navigation.selectedChapterId);
@@ -101,13 +159,6 @@ export default function App() {
         setApiStatus('connected');
       } catch {
         if (cancelled) return;
-        setChaptersById((current) => {
-          if (current[navigation.selectedChapterId]) return current;
-          return {
-            ...current,
-            [navigation.selectedChapterId]: findChapter(navigation.selectedChapterId),
-          };
-        });
         setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
       }
     }
@@ -119,12 +170,46 @@ export default function App() {
     };
   }, [chaptersById, navigation.selectedChapterId]);
 
+  useEffect(() => {
+    if ((route.name !== 'Reader' && route.name !== 'SceneDebug') || !currentChapter) return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const refreshReaderGenerationState = async () => {
+      try {
+        const [apiTasks, apiImages, apiCandidates] = await Promise.all([
+          fetchGenerationTasks(),
+          fetchSceneImages(),
+          fetchSceneCandidates(currentChapter.id),
+        ]);
+        if (cancelled) return;
+        setGenerationTasks(apiTasks);
+        setSceneImages(apiImages);
+        setSceneCandidates(apiCandidates);
+        setApiStatus('connected');
+      } catch {
+        if (cancelled) return;
+        setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
+      }
+    };
+
+    refreshReaderGenerationState();
+    timer = setInterval(refreshReaderGenerationState, POLLING_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [currentChapter, route.name]);
+
   const navigate = (nextRoute: AppRoute) => {
     setNavigation((current) => ({ ...current, route: nextRoute }));
   };
 
   const openBook = (bookId: string) => {
-    const book = shelfBooks.find((item) => item.id === bookId) ?? findBook(bookId);
+    const book = shelfBooks.find((item) => item.id === bookId);
+    if (!book) return;
 
     setNavigation((current) => ({
       ...current,
@@ -141,10 +226,7 @@ export default function App() {
 
   const toggleShelfEditing = () => {
     setIsEditingShelf((current) => {
-      if (current) {
-        setSelectedImportedBookIds([]);
-      }
-
+      if (current) setSelectedImportedBookIds([]);
       return !current;
     });
   };
@@ -161,23 +243,24 @@ export default function App() {
     });
   };
 
-  const removeSelectedImportedBooks = () => {
+  const removeSelectedImportedBooks = async () => {
     const selectedIds = new Set(selectedImportedBookIds.filter((bookId) => bookId.startsWith('import-')));
     if (selectedIds.size === 0) return;
+    const selectedChapterIds = new Set(
+      shelfBooks.filter((book) => selectedIds.has(book.id)).map((book) => book.currentChapterId),
+    );
 
     setShelfBooks((current) => {
       const nextBooks = current.filter((book) => !selectedIds.has(book.id));
-      const fallbackBook = nextBooks[0] ?? initialBooks[0];
+      const fallbackBook = nextBooks[0];
 
       setNavigation((currentNavigation) => {
-        if (!selectedIds.has(currentNavigation.selectedBookId)) {
-          return currentNavigation;
-        }
+        if (!selectedIds.has(currentNavigation.selectedBookId)) return currentNavigation;
 
         return {
           ...currentNavigation,
-          selectedBookId: fallbackBook.id,
-          selectedChapterId: fallbackBook.currentChapterId,
+          selectedBookId: fallbackBook?.id ?? currentNavigation.selectedBookId,
+          selectedChapterId: fallbackBook?.currentChapterId ?? currentNavigation.selectedChapterId,
           route: { name: 'Shelf' },
         };
       });
@@ -188,17 +271,57 @@ export default function App() {
     setChaptersById((current) => {
       const next: Record<string, Chapter> = {};
       Object.entries(current).forEach(([chapterId, chapter]) => {
-        if (!selectedIds.has(chapter.bookId)) {
-          next[chapterId] = chapter;
-        }
+        if (!selectedIds.has(chapter.bookId)) next[chapterId] = chapter;
       });
       return next;
     });
+    setGenerationTasks((current) => current.filter((task) => !selectedChapterIds.has(task.chapterId)));
+    setSceneImages((current) => current.filter((image) => !selectedChapterIds.has(image.chapterId)));
+    setSceneCandidates((current) => current.filter((candidate) => !selectedChapterIds.has(candidate.chapterId)));
 
     clearShelfEditing();
+
+    try {
+      await Promise.all([...selectedIds].map((bookId) => deleteBook(bookId)));
+      setApiStatus('connected');
+    } catch {
+      setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
+    }
   };
+
   const setVisualStyle = (visualStyle: VisualStyle) => {
     setNavigation((current) => ({ ...current, visualStyle }));
+  };
+
+  const retrySceneGeneration = async (taskId: string) => {
+    setGenerationTasks((current) =>
+      current.map((task) =>
+        task.id === taskId
+          ? { ...task, status: 'queued', progress: 0, label: '场景图生成已重新排队', errorMessage: undefined }
+          : task,
+      ),
+    );
+
+    try {
+      const retriedTask = await retryGenerationTask(taskId);
+      setGenerationTasks((current) => [...current.filter((task) => task.id !== retriedTask.id), retriedTask]);
+      setApiStatus('connected');
+    } catch (error) {
+      setGenerationTasks((current) =>
+        current.map((task) =>
+          task.id === taskId
+            ? {
+                ...task,
+                status: 'failed',
+                progress: 0,
+                label: '场景图重新生成失败',
+                errorMessage: error instanceof Error ? error.message : 'Retry request failed',
+              }
+            : task,
+        ),
+      );
+      setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
+    }
   };
 
   const beginFileImport = async () => {
@@ -224,27 +347,53 @@ export default function App() {
     }
   };
 
-  const completeMockImport = () => {
+  const completeMockImport = async () => {
     const draft = pendingImportDraft;
 
     if (draft) {
       const importedBook = { ...draft.book, visualStyle: navigation.visualStyle };
-      const importedChapters = draft.chapters;
+      let persistedBook: Book = importedBook;
+      let persistedChapters: Chapter[] = draft.chapters;
+      let generationTask: GenerationTask | null = null;
+
+      try {
+        persistedBook = await createBook(importedBook);
+        persistedChapters = await Promise.all(draft.chapters.map((chapter) => createChapter(chapter)));
+        generationTask = await submitChapterGenerationTask(persistedBook.currentChapterId);
+        setApiStatus('connected');
+      } catch {
+        generationTask = {
+          id: `task-${importedBook.currentChapterId}-scene-image`,
+          bookId: importedBook.id,
+          chapterId: importedBook.currentChapterId,
+          progress: 0,
+          status: 'failed',
+          taskType: 'scene_image',
+          label: '场景图生成任务提交失败',
+          errorMessage: '后端暂时不可用，正文已保留，可以稍后重试生成。',
+        };
+        setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
+      }
+
+      const displayBook = { ...persistedBook, visualStyle: navigation.visualStyle };
       setShelfBooks((current) => {
-        const withoutExisting = current.filter((book) => book.id !== importedBook.id);
-        return [...withoutExisting, importedBook];
+        const withoutExisting = current.filter((book) => book.id !== displayBook.id);
+        return [displayBook, ...withoutExisting];
       });
       setChaptersById((current) => {
         const next = { ...current };
-        importedChapters.forEach((chapter) => {
+        persistedChapters.forEach((chapter) => {
           next[chapter.id] = chapter;
         });
         return next;
       });
+      if (generationTask) {
+        setGenerationTasks((current) => [...current.filter((task) => task.id !== generationTask.id), generationTask]);
+      }
       setNavigation((current) => ({
         ...current,
-        selectedBookId: importedBook.id,
-        selectedChapterId: importedBook.currentChapterId,
+        selectedBookId: displayBook.id,
+        selectedChapterId: displayBook.currentChapterId,
         route: { name: 'Reader' },
       }));
       setPendingImportDraft(null);
@@ -255,6 +404,7 @@ export default function App() {
   };
 
   const goBack = () => {
+    if (route.name === 'SceneDebug') navigate({ name: 'Reader' });
     if (route.name === 'Reader') navigate({ name: 'Shelf' });
     if (route.name === 'Style') navigate({ name: 'Import' });
     if (route.name === 'Import') navigate({ name: 'Shelf' });
@@ -272,7 +422,7 @@ export default function App() {
         {route.name === 'Shelf' ? (
           <ShelfScreen
             books={shelfBooks}
-            featuredBookId={currentBook.id}
+            featuredBookId={currentBook?.id}
             isEditingShelf={isEditingShelf}
             selectedBookIds={selectedImportedBookIds}
             onImport={() => {
@@ -296,7 +446,7 @@ export default function App() {
                 onPress={() => setShowControls((value) => !value)}
                 style={styles.roundButton}
               >
-                <Text style={styles.menuText}>☰</Text>
+                <Text style={styles.menuText}>?</Text>
               </Pressable>
             ) : (
               <View style={styles.headerSpacer} />
@@ -319,15 +469,29 @@ export default function App() {
             onStart={completeMockImport}
           />
         )}
-        {route.name === 'Reader' && (
-          <ReaderScreen
-            chapter={currentChapter}
-            generationTasks={generationTasks}
-            sceneImages={sceneImages}
-            visualStyle={navigation.visualStyle}
-            showControls={showControls}
-            onCloseControls={() => setShowControls(false)}
-          />
+        {route.name === 'Reader' &&
+          (renderedChapter ? (
+            <ReaderScreen
+              chapter={renderedChapter}
+              generationTasks={generationTasks}
+              sceneImages={sceneImages}
+              visualStyle={navigation.visualStyle}
+              showControls={showControls}
+              onCloseControls={() => setShowControls(false)}
+              onOpenSceneDebug={() => {
+                setShowControls(false);
+                navigate({ name: 'SceneDebug' });
+              }}
+              onRetryGenerationTask={retrySceneGeneration}
+            />
+          ) : (
+            <View style={styles.emptyReader}>
+              <Text style={styles.emptyReaderText}>???????</Text>
+            </View>
+          ))}
+
+        {route.name === 'SceneDebug' && (
+          <SceneDebugScreen chapter={currentChapter} candidates={sceneCandidates} sceneImages={sceneImages} />
         )}
         {apiStatus === 'fallback' && (
           <View style={styles.apiBadge}>
@@ -413,5 +577,16 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 10,
     fontWeight: '800',
+  },
+  emptyReader: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  emptyReaderText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

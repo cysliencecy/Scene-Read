@@ -1,6 +1,22 @@
-﻿import { View, StyleSheet } from 'react-native';
+import { Image, Pressable, StyleSheet, View } from 'react-native';
 
-export function SceneImage({ variant }: { variant: 'street' | 'office' }) {
+export function SceneImage({
+  imageUrl,
+  variant,
+  onPreview,
+}: {
+  imageUrl?: string;
+  variant: 'street' | 'office';
+  onPreview?: (imageUrl: string) => void;
+}) {
+  if (imageUrl) {
+    return (
+      <Pressable accessibilityRole="imagebutton" onPress={() => onPreview?.(imageUrl)} style={styles.sceneImage}>
+        <Image source={{ uri: imageUrl }} resizeMode="cover" style={styles.sceneImageContent} />
+      </Pressable>
+    );
+  }
+
   return (
     <View style={[styles.sceneImage, variant === 'office' ? styles.officeArt : styles.streetArt]}>
       <View style={styles.sceneLayerOne} />
@@ -19,6 +35,10 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(37,34,30,0.08)',
     marginTop: 2,
     marginBottom: 22,
+  },
+  sceneImageContent: {
+    width: '100%',
+    height: '100%',
   },
   streetArt: {
     backgroundColor: '#2c4054',

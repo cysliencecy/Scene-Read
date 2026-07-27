@@ -20,13 +20,23 @@ const parser = new XMLParser({
   attributeNamePrefix: '',
 });
 
-export const normalizeId = (value: string) =>
-  value
+const hashText = (value: string) => {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
+};
+
+export const normalizeId = (value: string) => {
+  const asciiSlug = value
     .toLowerCase()
     .replace(/\.[^.]+$/, '')
-    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
+    .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 36);
+    .slice(0, 24);
+  return `${asciiSlug || 'book'}-${hashText(value)}`.slice(0, 36);
+};
 
 const stripHtml = (html: string) =>
   html

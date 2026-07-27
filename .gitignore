@@ -5,6 +5,7 @@ node_modules/
 dist/
 .tmp/
 worker/.tmp/
+server/.tmp-*.log
 __pycache__/
 *.py[cod]
 
@@ -12,6 +13,7 @@ __pycache__/
 .expo/
 expo-web.out.log
 expo-web.err.log
+mobile/.tmp-*.log
 
 # IDE / editor state
 .idea/

@@ -10,12 +10,14 @@ export function ReaderControlsSheet({
   progress,
   onFontSizeChange,
   onThemeChange,
+  onOpenSceneDebug,
 }: {
   fontSize: ReaderFontSize;
   theme: ReaderTheme;
   progress: number;
   onFontSizeChange: (fontSize: ReaderFontSize) => void;
   onThemeChange: (theme: ReaderTheme) => void;
+  onOpenSceneDebug: () => void;
 }) {
   return (
     <View style={styles.controlsSheet}>
@@ -46,6 +48,10 @@ export function ReaderControlsSheet({
           </Pressable>
         ))}
       </View>
+
+      <Pressable accessibilityRole="button" onPress={onOpenSceneDebug} style={styles.debugButton}>
+        <Text style={styles.debugButtonText}>生成调试</Text>
+      </Pressable>
 
       <View style={styles.slider}>
         <View style={[styles.sliderFill, { width: `${progress}%` }]} />
@@ -87,6 +93,15 @@ const styles = StyleSheet.create({
   },
   controlText: { color: colors.deep, fontSize: 13, fontWeight: '800' },
   controlTextActive: { color: colors.deep },
+  debugButton: {
+    height: 42,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.deep,
+    marginBottom: 16,
+  },
+  debugButtonText: { color: '#fff', fontSize: 13, fontWeight: '900' },
   slider: { height: 4, borderRadius: 9, backgroundColor: '#dfd5c6', overflow: 'hidden' },
   sliderFill: { width: '46%', height: '100%', borderRadius: 9, backgroundColor: colors.deep },
   sheetProgress: { marginTop: 10, color: colors.muted, fontSize: 12, textAlign: 'center' },

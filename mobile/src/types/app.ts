@@ -46,14 +46,44 @@ export type Chapter = {
 export type SceneImage = {
   id: string;
   chapterId: string;
+  sourceBlockId?: string;
+  position?: number;
   variant: 'street' | 'office';
   prompt: string;
+  imagePath?: string;
+  imageUrl?: string;
 };
 
 export type GenerationTask = {
   id: string;
+  bookId?: string;
   chapterId: string;
   progress: number;
-  status: 'queued' | 'generating' | 'completed';
+  status: 'queued' | 'recognizing' | 'generating' | 'completed' | 'failed';
+  taskType?: 'scene_image';
   label: string;
+  errorMessage?: string;
+  provider?: string;
+  durationMs?: number;
 };
+
+export type SceneCandidate = {
+  id: string;
+  taskId: string;
+  bookId?: string;
+  chapterId: string;
+  order: number;
+  sourceBlockId: string;
+  position: number;
+  reason: string;
+  sourceText: string;
+  promptDraft: string;
+  finalPrompt?: string;
+  locationChange?: string;
+  confidence: number;
+  provider?: string;
+  model?: string;
+  promptVersion?: string;
+  rawResponse?: unknown;
+};
+

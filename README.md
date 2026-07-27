@@ -77,8 +77,9 @@ http://localhost:8081
 
 移动端预览：
 
-- Android：运行 `npx expo start --android`
-- iOS：需要 macOS 或使用 Expo Go / Expo Dev Client 相关流程
+- Web：运行 `npx expo start --web --port 8081`
+- iOS / Android 真机：先在 `mobile/.env.local` 配置 `EXPO_PUBLIC_API_BASE_URL=http://你的电脑局域网IP:4000`，再运行 `npx expo start --lan`
+- 详细步骤见 [mobile/README.md](mobile/README.md)
 
 ## Codex 协作方式
 

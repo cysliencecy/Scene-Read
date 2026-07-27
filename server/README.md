@@ -5,7 +5,7 @@ Node.js / TypeScript API skeleton for the SceneReader app.
 This backend can run with in-memory mock data or Supabase.
 
 - Without Supabase env vars: read mock data, reject persistent writes.
-- With Supabase env vars: read and write `books`, `chapters`, and `generation_tasks`.
+- With Supabase env vars: read and write `books`, `chapters`, `generation_tasks`, and `scene_images`.
 
 ## Run
 
@@ -19,6 +19,28 @@ Default URL:
 
 ```text
 http://localhost:4000
+```
+
+When the App submits `POST /chapters/:chapterId/generation-task`, the local API starts one Worker process automatically by default. This is meant for the first local product loop: import a book, stay on the reader page, then wait for the generated scene image to appear.
+
+Worker defaults:
+
+```powershell
+$env:WORKER_SCENE_PROVIDER="heuristic"
+$env:IMAGE_PROVIDER="mock-svg"
+$env:WORKER_MAX_IMAGES="1"
+```
+
+On Windows, the server tries `py -3` by default. If your machine does not have the Python launcher configured, set the Python 3 executable explicitly before running the server:
+
+```powershell
+$env:WORKER_PYTHON="C:\Users\18270\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+```
+
+Disable automatic Worker execution only when debugging the queue manually:
+
+```powershell
+$env:WORKER_AUTO_RUN="false"
 ```
 
 Supabase setup:
@@ -51,6 +73,7 @@ npm run build
 - `GET /scene-images/:imageId`
 - `POST /worker/scene-candidates`
 - `GET /worker/scene-candidates`
+- `POST /worker/scene-images`
 
 ## Scope
 
@@ -60,11 +83,11 @@ Included:
 - TypeScript strict mode
 - mock books, chapters, generation tasks, and scene images
 - response shapes aligned with current mobile mock data
-- optional Supabase data layer for books, chapters, and generation tasks
+- optional Supabase data layer for books, chapters, generation tasks, and scene images
+- Supabase Storage upload for generated scene images
+- local automatic Worker execution after chapter generation task submission
 
 Not included:
 
-- real file import
-- Python Worker
-- AI scene recognition
-- image generation
+- task retry logic
+- user auth and ownership policies

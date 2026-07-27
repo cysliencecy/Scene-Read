@@ -1,15 +1,41 @@
-﻿import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme/colors';
+import type { GenerationTask } from '../types/app';
 
-export function GeneratingSceneCard({ progress, label }: { progress: number; label: string }) {
+const getStatusTitle = (status?: GenerationTask['status']) => {
+  if (status === 'queued') return '场景图排队中';
+  if (status === 'recognizing') return '正在识别场景';
+  if (status === 'failed') return '场景图生成失败';
+  if (status === 'completed') return '场景图已生成';
+  return '场景图生成中';
+};
+
+export function GeneratingSceneCard({
+  errorMessage,
+  label,
+  onRetry,
+  progress,
+  status,
+}: {
+  errorMessage?: string;
+  onRetry?: () => void;
+  progress: number;
+  label: string;
+  status?: GenerationTask['status'];
+}) {
   return (
-    <View style={styles.generatingCard}>
+    <View style={[styles.generatingCard, status === 'failed' && styles.failedCard]}>
       <View style={styles.progressBadge}>
         <Text style={styles.progressBadgeText}>{progress}</Text>
       </View>
       <View style={styles.generatingCopy}>
-        <Text style={styles.generatingTitle}>场景图生成中</Text>
-        <Text style={styles.generatingText}>{label}</Text>
+        <Text style={styles.generatingTitle}>{getStatusTitle(status)}</Text>
+        <Text style={styles.generatingText}>{errorMessage ?? label}</Text>
+        {status === 'failed' && onRetry ? (
+          <Pressable accessibilityRole="button" onPress={onRetry} style={styles.retryButton}>
+            <Text style={styles.retryButtonText}>重新生成</Text>
+          </Pressable>
+        ) : null}
         <View style={styles.miniProgress}>
           <View style={[styles.miniProgressFill, { width: `${progress}%` }]} />
         </View>
@@ -32,6 +58,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
     marginBottom: 22,
   },
+  failedCard: { backgroundColor: '#f5e5df' },
   progressBadge: {
     width: 42,
     height: 42,
@@ -44,6 +71,16 @@ const styles = StyleSheet.create({
   generatingCopy: { flex: 1 },
   generatingTitle: { color: colors.ink, fontSize: 14, fontWeight: '800' },
   generatingText: { marginTop: 4, color: colors.muted, fontSize: 12 },
+  retryButton: {
+    alignSelf: 'flex-start',
+    minHeight: 34,
+    borderRadius: 10,
+    backgroundColor: colors.deep,
+    justifyContent: 'center',
+    marginTop: 10,
+    paddingHorizontal: 14,
+  },
+  retryButtonText: { color: '#fff', fontSize: 12, fontWeight: '800' },
   miniProgress: {
     width: 158,
     height: 4,

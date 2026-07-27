@@ -1,5 +1,5 @@
 ﻿import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { GeneratingSceneCard } from '../components/GeneratingSceneCard';
 import {
   ReaderControlsSheet,
@@ -61,6 +61,8 @@ export function ReaderScreen({
   visualStyle,
   showControls,
   onCloseControls,
+  onOpenSceneDebug,
+  onRetryGenerationTask,
 }: {
   chapter: Chapter;
   generationTasks: GenerationTask[];
@@ -68,9 +70,12 @@ export function ReaderScreen({
   visualStyle: VisualStyle;
   showControls: boolean;
   onCloseControls: () => void;
+  onOpenSceneDebug: () => void;
+  onRetryGenerationTask: (taskId: string) => void;
 }) {
   const [fontSize, setFontSize] = useState<ReaderFontSize>('中');
   const [theme, setTheme] = useState<ReaderTheme>('纸张');
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
   const themeTokens = readerThemeTokens[theme];
   const typography = fontSizeTokens[fontSize];
@@ -78,14 +83,35 @@ export function ReaderScreen({
     () => [styles.readerShell, { backgroundColor: themeTokens.background }],
     [themeTokens.background],
   );
+  const chapterSceneImages = useMemo(
+    () => sceneImages.filter((image) => image.chapterId === chapter.id),
+    [chapter.id, sceneImages],
+  );
+  const chapterGenerationTasks = useMemo(
+    () => generationTasks.filter((task) => task.chapterId === chapter.id),
+    [chapter.id, generationTasks],
+  );
+  const hasGeneratedSceneImages = chapterSceneImages.length > 0;
+  const hasActiveGenerationTasks = chapterGenerationTasks.some(
+    (task) => task.status === 'queued' || task.status === 'recognizing' || task.status === 'generating',
+  );
+  const fallbackGenerationTasks = chapterGenerationTasks.filter(
+    (task) => !hasGeneratedSceneImages || task.status === 'failed',
+  );
+  const hasInlineSceneImageBlocks = chapter.blocks.some((block) => block.type === 'scene-image');
+  const hasInlineGenerationTaskBlocks = chapter.blocks.some((block) => block.type === 'scene-placeholder');
 
   return (
     <View style={readerStyle}>
       <ScrollView style={styles.readerScroll} contentContainerStyle={styles.readerContent}>
-        <View style={styles.toast}>
-          <Text style={styles.toastDot}>◌</Text>
-          <Text style={styles.toastText}>场景图正在后台生成，你可以先阅读原文。</Text>
-        </View>
+        {(hasActiveGenerationTasks || hasGeneratedSceneImages) && (
+          <View style={styles.toast}>
+            <Text style={styles.toastDot}>◌</Text>
+            <Text style={styles.toastText}>
+              {hasGeneratedSceneImages ? '场景图已生成，正在按章节位置展示。' : '场景图正在后台生成，你可以先阅读原文。'}
+            </Text>
+          </View>
+        )}
 
         <Text style={[styles.chapterTitle, { color: themeTokens.title }]}>{chapter.title}</Text>
         {chapter.blocks.map((block) => {
@@ -105,13 +131,51 @@ export function ReaderScreen({
           if (block.type === 'scene-placeholder') {
             const task = generationTasks.find((item) => item.id === block.taskId);
             if (!task) return null;
-            return <GeneratingSceneCard key={block.id} progress={task.progress} label={task.label} />;
+            return (
+              <GeneratingSceneCard
+                key={block.id}
+                errorMessage={task.errorMessage}
+                progress={task.progress}
+                label={task.label}
+                onRetry={() => onRetryGenerationTask(task.id)}
+                status={task.status}
+              />
+            );
           }
 
           const image = sceneImages.find((item) => item.id === block.imageId);
           if (!image) return null;
-          return <SceneImage key={block.id} variant={image.variant} />;
+          return (
+            <SceneImage
+              key={block.id}
+              imageUrl={image.imageUrl}
+              variant={image.variant}
+              onPreview={setPreviewImageUrl}
+            />
+          );
         })}
+
+        {!hasInlineSceneImageBlocks &&
+          chapterSceneImages.map((image) => (
+            <SceneImage
+              key={image.id}
+              imageUrl={image.imageUrl}
+              variant={image.variant}
+              onPreview={setPreviewImageUrl}
+            />
+          ))}
+
+        {!hasInlineGenerationTaskBlocks &&
+          fallbackGenerationTasks.map((task) => (
+            <GeneratingSceneCard
+              key={task.id}
+              errorMessage={task.errorMessage}
+              progress={task.progress}
+              label={task.label}
+              onRetry={() => onRetryGenerationTask(task.id)}
+              status={task.status}
+            />
+          ))}
 
         <Text style={[styles.readerHint, { color: themeTokens.hint }]}>当前风格：{visualStyle}</Text>
       </ScrollView>
@@ -133,9 +197,29 @@ export function ReaderScreen({
             onFontSizeChange={setFontSize}
             onThemeChange={setTheme}
             progress={chapter.progress}
+            onOpenSceneDebug={onOpenSceneDebug}
           />
         </Pressable>
       )}
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={Boolean(previewImageUrl)}
+        onRequestClose={() => setPreviewImageUrl(null)}
+      >
+        <View style={styles.previewOverlay}>
+          <Pressable style={styles.previewBackdrop} onPress={() => setPreviewImageUrl(null)} />
+          <View style={styles.previewHeader}>
+            <Pressable accessibilityRole="button" onPress={() => setPreviewImageUrl(null)} style={styles.previewClose}>
+              <Text style={styles.previewCloseText}>x</Text>
+            </Pressable>
+          </View>
+          {previewImageUrl ? (
+            <Image source={{ uri: previewImageUrl }} resizeMode="contain" style={styles.previewImage} />
+          ) : null}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -181,5 +265,46 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: 'flex-end',
     backgroundColor: 'rgba(0,0,0,0.08)',
+  },
+  previewOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center',
+  },
+  previewBackdrop: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+  },
+  previewHeader: {
+    position: 'absolute',
+    top: 18,
+    left: 0,
+    right: 0,
+    zIndex: 2,
+    paddingHorizontal: 18,
+    alignItems: 'flex-end',
+  },
+  previewClose: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  previewCloseText: {
+    color: '#fff',
+    fontSize: 30,
+    lineHeight: 34,
+    fontWeight: '500',
+  },
+  previewImage: {
+    width: '100%',
+    height: '82%',
   },
 });

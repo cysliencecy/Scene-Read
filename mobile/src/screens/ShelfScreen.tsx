@@ -15,7 +15,7 @@ export function ShelfScreen({
   onToggleEditingShelf,
 }: {
   books: Book[];
-  featuredBookId: string;
+  featuredBookId?: string;
   isEditingShelf: boolean;
   selectedBookIds: string[];
   onImport: () => void;
