@@ -21,6 +21,7 @@ class GeneratedSceneImage:
     chapterId: str
     sourceBlockId: str
     position: int
+    imageType: str
     prompt: str
     imageBase64: str
     mimeType: str
@@ -120,17 +121,75 @@ def _download_glm_image(prompt: str) -> tuple[bytes, str]:
     return _download_url(image_url)
 
 
+def target_image_count_for_paragraphs(paragraph_count: int, max_images: int = 3) -> int:
+    if paragraph_count < 20:
+        target = 1
+    elif paragraph_count <= 50:
+        target = 2
+    else:
+        target = 3
+    return max(1, min(max_images, target))
+
+
+def select_candidates_for_generation(
+    candidates: list[SceneCandidate],
+    target_count: int,
+) -> list[SceneCandidate]:
+    if target_count <= 0:
+        return []
+
+    sorted_candidates = sorted(candidates, key=lambda candidate: (-candidate.confidence, candidate.position))
+    selected: list[SceneCandidate] = []
+    used_types: set[str] = set()
+
+    for candidate in sorted_candidates:
+        if len(selected) >= target_count:
+            break
+        if candidate.imageType in used_types:
+            continue
+        selected.append(candidate)
+        used_types.add(candidate.imageType)
+
+    for candidate in sorted_candidates:
+        if len(selected) >= target_count:
+            break
+        if candidate in selected:
+            continue
+        selected.append(candidate)
+
+    return sorted(selected, key=lambda candidate: candidate.position)
+
+
+def _type_prompt(candidate: SceneCandidate) -> str:
+    if candidate.imageType == "character":
+        return "人物图：突出人物姿态、服装、关系氛围，不做证件照式正脸，避免夸张五官。"
+    if candidate.imageType == "object":
+        return "物品图：突出关键物品的材质、位置和剧情意义，构图克制，不像广告图。"
+    return "场景图：突出地点、空间结构、环境光线、天气和时代感，像小说阅读插图。"
+
+
+def _final_prompt(candidate: SceneCandidate) -> str:
+    return (
+        f"{_type_prompt(candidate)}"
+        f"{candidate.promptDraft}"
+        "统一要求：不要文字、不要水印、不要漫画分镜文字、不要畸形手脸、不要过度戏剧化。"
+    )
+
+
 def generate_images_for_candidates(
     candidates: list[SceneCandidate],
     provider: str | None = None,
     max_images: int = 1,
+    target_images: int | None = None,
 ) -> list[GeneratedSceneImage]:
     _load_local_env()
     image_provider = provider or os.getenv("IMAGE_PROVIDER", "pollinations")
     generated: list[GeneratedSceneImage] = []
 
-    for candidate in candidates[:max_images]:
-        prompt = candidate.promptDraft
+    selected_candidates = select_candidates_for_generation(candidates, target_images or max_images)
+
+    for candidate in selected_candidates:
+        prompt = _final_prompt(candidate)
         if image_provider == "mock-svg":
             image_bytes = _svg_preview(prompt)
             mime_type = "image/svg+xml"
@@ -147,6 +206,7 @@ def generate_images_for_candidates(
                 chapterId=candidate.chapterId,
                 sourceBlockId=candidate.sourceBlockId,
                 position=candidate.position,
+                imageType=candidate.imageType,
                 prompt=prompt,
                 imageBase64=base64.b64encode(image_bytes).decode("ascii"),
                 mimeType=mime_type,

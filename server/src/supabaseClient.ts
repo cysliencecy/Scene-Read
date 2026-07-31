@@ -111,6 +111,7 @@ export type Database = {
           chapter_id: string;
           source_block_id: string | null;
           position: number | null;
+          image_type: 'scene' | 'character' | 'object' | null;
           variant: 'street' | 'office';
           prompt: string;
           image_path: string | null;
@@ -122,6 +123,7 @@ export type Database = {
           chapter_id: string;
           source_block_id?: string | null;
           position?: number | null;
+          image_type?: 'scene' | 'character' | 'object' | null;
           variant: 'street' | 'office';
           prompt: string;
           image_path?: string | null;
@@ -131,6 +133,7 @@ export type Database = {
           chapter_id?: string;
           source_block_id?: string | null;
           position?: number | null;
+          image_type?: 'scene' | 'character' | 'object' | null;
           variant?: 'street' | 'office';
           prompt?: string;
           image_path?: string | null;
@@ -150,6 +153,7 @@ export type Database = {
           source_text: string;
           prompt_draft: string;
           final_prompt: string | null;
+          image_type: 'scene' | 'character' | 'object' | null;
           location_change: string | null;
           confidence: number;
           provider: string | null;
@@ -171,6 +175,7 @@ export type Database = {
           source_text: string;
           prompt_draft: string;
           final_prompt?: string | null;
+          image_type?: 'scene' | 'character' | 'object' | null;
           location_change?: string | null;
           confidence?: number;
           provider?: string | null;
@@ -190,6 +195,7 @@ export type Database = {
           source_text?: string;
           prompt_draft?: string;
           final_prompt?: string | null;
+          image_type?: 'scene' | 'character' | 'object' | null;
           location_change?: string | null;
           confidence?: number;
           provider?: string | null;

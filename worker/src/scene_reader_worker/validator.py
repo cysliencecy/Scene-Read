@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .types import ChapterPayload, SceneCandidate, WorkerLog
+from .types import ChapterPayload, ImageType, SceneCandidate, WorkerLog
+
+
+VALID_IMAGE_TYPES: set[ImageType] = {"scene", "character", "object"}
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -11,6 +14,12 @@ def _as_float(value: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
     return max(0.0, min(1.0, parsed))
+
+
+def _as_image_type(value: Any) -> ImageType:
+    if value in VALID_IMAGE_TYPES:
+        return value
+    return "scene"
 
 
 def validate_ai_candidates(payload: ChapterPayload, raw_candidates: Any) -> tuple[list[SceneCandidate], list[WorkerLog]]:
@@ -33,7 +42,7 @@ def validate_ai_candidates(payload: ChapterPayload, raw_candidates: Any) -> tupl
     candidates: list[SceneCandidate] = []
     seen_ids: set[str] = set()
 
-    for item in raw_candidates[:6]:
+    for item in raw_candidates[:8]:
         if not isinstance(item, dict):
             logs.append(WorkerLog(level="warning", message="Skipped non-object AI candidate."))
             continue
@@ -57,6 +66,7 @@ def validate_ai_candidates(payload: ChapterPayload, raw_candidates: Any) -> tupl
         location_change = str(item.get("locationChange") or "").strip()
         prompt_draft = str(item.get("promptDraft") or "").strip()
         confidence = _as_float(item.get("confidence"), 0.5)
+        image_type = _as_image_type(item.get("imageType"))
 
         if not prompt_draft:
             prompt_draft = (
@@ -74,12 +84,13 @@ def validate_ai_candidates(payload: ChapterPayload, raw_candidates: Any) -> tupl
                 reason=reason[:160],
                 sourceText=source_text[:180],
                 promptDraft=prompt_draft[:360],
+                imageType=image_type,
                 locationChange=location_change[:120],
                 confidence=confidence,
             )
         )
 
-        if len(candidates) >= 3:
+        if len(candidates) >= 6:
             break
 
     logs.append(

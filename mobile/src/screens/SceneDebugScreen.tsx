@@ -81,6 +81,7 @@ export function SceneDebugScreen({
 
               <Text style={styles.meta}>sourceBlockId: {candidate.sourceBlockId || '-'}</Text>
               <Text style={styles.meta}>position: {candidate.position}</Text>
+              <Text style={styles.meta}>imageType: {candidate.imageType || 'scene'}</Text>
 
               <View style={styles.sourceBox}>
                 <Text style={styles.sourceLabel}>原文片段</Text>
@@ -100,7 +101,8 @@ export function SceneDebugScreen({
               ) : (
                 <Text style={styles.bodyText}>暂未匹配到已生成图片。</Text>
               )}
-              <Text style={styles.bodyText}>当前规则：第一版每章默认生成第 1 个候选。</Text>
+              <Text style={styles.bodyText}>matchedImageType: {matchedImage?.imageType || '-'}</Text>
+              <Text style={styles.bodyText}>当前规则：按段落数生成 1-3 张，并尽量保持 scene / character / object 类型多样。</Text>
               <Text style={styles.meta}>provider: {candidate.provider || '-'}</Text>
               <Text style={styles.meta}>model: {candidate.model || '-'}</Text>
               <Text style={styles.meta}>promptVersion: {candidate.promptVersion || '-'}</Text>

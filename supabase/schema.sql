@@ -63,6 +63,7 @@ create table if not exists public.scene_images (
   chapter_id text not null references public.chapters(id) on delete cascade,
   source_block_id text,
   position integer,
+  image_type text check (image_type in ('scene', 'character', 'object')),
   variant text not null check (variant in ('street', 'office')),
   prompt text not null,
   image_path text,
@@ -72,6 +73,10 @@ create table if not exists public.scene_images (
 
 alter table public.scene_images add column if not exists source_block_id text;
 alter table public.scene_images add column if not exists position integer;
+alter table public.scene_images add column if not exists image_type text;
+alter table public.scene_images drop constraint if exists scene_images_image_type_check;
+alter table public.scene_images
+  add constraint scene_images_image_type_check check (image_type in ('scene', 'character', 'object'));
 
 insert into storage.buckets (id, name, public)
 values ('scene-images', 'scene-images', true)
@@ -91,6 +96,7 @@ create table if not exists public.scene_candidates (
   source_text text not null,
   prompt_draft text not null,
   final_prompt text,
+  image_type text check (image_type in ('scene', 'character', 'object')),
   location_change text,
   confidence numeric not null default 0,
   provider text,
@@ -111,6 +117,10 @@ alter table public.scene_candidates add column if not exists reason text;
 alter table public.scene_candidates add column if not exists source_text text;
 alter table public.scene_candidates add column if not exists prompt_draft text;
 alter table public.scene_candidates add column if not exists final_prompt text;
+alter table public.scene_candidates add column if not exists image_type text;
+alter table public.scene_candidates drop constraint if exists scene_candidates_image_type_check;
+alter table public.scene_candidates
+  add constraint scene_candidates_image_type_check check (image_type in ('scene', 'character', 'object'));
 alter table public.scene_candidates add column if not exists location_change text;
 alter table public.scene_candidates add column if not exists confidence numeric not null default 0;
 alter table public.scene_candidates add column if not exists provider text;

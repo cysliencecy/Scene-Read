@@ -1,7 +1,16 @@
 import unittest
 from unittest.mock import patch
 
-from scene_reader_worker.image_generator import generate_images_for_candidates
+from scene_reader_worker.image_generator import (
+    generate_images_for_candidates,
+    select_candidates_for_generation,
+    target_image_count_for_paragraphs,
+)
+from scene_reader_worker.ai_client import (
+    DEFAULT_AI_BASE_URL,
+    DEFAULT_AI_MODEL,
+    _get_api_key,
+)
 from scene_reader_worker.processor import process_chapter
 from scene_reader_worker.prompt import build_scene_recognition_user_prompt
 from scene_reader_worker.validator import validate_ai_candidates
@@ -19,7 +28,35 @@ SAMPLE_PAYLOAD = {
 }
 
 
+def result_candidate(source_id: str, image_type: str, confidence: float, position: int):
+    from scene_reader_worker.types import SceneCandidate
+
+    return SceneCandidate(
+        id=f"chapter-1-{source_id}",
+        chapterId="chapter-1",
+        sourceBlockId=source_id,
+        position=position,
+        reason="test",
+        sourceText="test",
+        promptDraft="test",
+        imageType=image_type,
+        confidence=confidence,
+    )
+
+
 class ProcessorTest(unittest.TestCase):
+    def test_scene_recognition_defaults_to_kimi_k3(self) -> None:
+        self.assertEqual(DEFAULT_AI_BASE_URL, "https://api.kimi.com/coding")
+        self.assertEqual(DEFAULT_AI_MODEL, "kimi-k3")
+
+    def test_kimi_endpoint_only_uses_kimi_credentials(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"KIMI_API_KEY": "kimi-key", "GLM_API_KEY": "glm-key"},
+            clear=True,
+        ):
+            self.assertEqual(_get_api_key(DEFAULT_AI_BASE_URL), "kimi-key")
+
     def test_process_chapter_outputs_scene_candidates_with_heuristic_provider(self) -> None:
         result = process_chapter(SAMPLE_PAYLOAD, provider="heuristic")
 
@@ -29,6 +66,7 @@ class ProcessorTest(unittest.TestCase):
         self.assertEqual(result.candidates[0].sourceBlockId, "p1")
         self.assertGreater(result.candidates[0].confidence, 0)
         self.assertTrue(result.candidates[0].promptDraft)
+        self.assertIn(result.candidates[0].imageType, {"scene", "character", "object"})
         self.assertTrue(result.logs)
 
     def test_build_scene_recognition_prompt_includes_block_ids(self) -> None:
@@ -75,6 +113,24 @@ class ProcessorTest(unittest.TestCase):
         self.assertEqual(images[0].chapterId, "chapter-1")
         self.assertEqual(images[0].mimeType, "image/svg+xml")
         self.assertTrue(images[0].imageBase64)
+        self.assertEqual(images[0].imageType, result.candidates[0].imageType)
+
+    def test_target_image_count_uses_paragraph_count(self) -> None:
+        self.assertEqual(target_image_count_for_paragraphs(5, max_images=3), 1)
+        self.assertEqual(target_image_count_for_paragraphs(20, max_images=3), 2)
+        self.assertEqual(target_image_count_for_paragraphs(51, max_images=3), 3)
+        self.assertEqual(target_image_count_for_paragraphs(51, max_images=2), 2)
+
+    def test_select_candidates_prefers_type_diversity(self) -> None:
+        candidates = [
+            result_candidate("a", "scene", 0.95, 0),
+            result_candidate("b", "scene", 0.9, 1),
+            result_candidate("c", "character", 0.7, 2),
+        ]
+
+        selected = select_candidates_for_generation(candidates, target_count=2)
+
+        self.assertEqual([candidate.imageType for candidate in selected], ["scene", "character"])
 
     def test_generate_images_with_glm_provider_downloads_returned_image_url(self) -> None:
         result = process_chapter(SAMPLE_PAYLOAD, provider="heuristic")

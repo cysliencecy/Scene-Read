@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
 
+ImageType = Literal["scene", "character", "object"]
+
+
 class ChapterBlock(TypedDict):
     id: str
     type: Literal["paragraph"]
@@ -27,6 +30,7 @@ class SceneCandidate:
     reason: str
     sourceText: str
     promptDraft: str
+    imageType: ImageType = "scene"
     locationChange: str = ""
     confidence: float = 0.0
 

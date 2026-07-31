@@ -10,6 +10,8 @@ export type Book = {
   visualStyle?: VisualStyle;
 };
 
+export type ImageType = 'scene' | 'character' | 'object';
+
 export type ChapterBlock =
   | {
       id: string;
@@ -53,6 +55,7 @@ export type SceneImage = {
   chapterId: string;
   sourceBlockId?: string;
   position?: number;
+  imageType?: ImageType;
   variant: 'street' | 'office';
   prompt: string;
   imagePath?: string;
@@ -71,6 +74,7 @@ export type SceneCandidate = {
   sourceText: string;
   promptDraft: string;
   finalPrompt?: string;
+  imageType?: ImageType;
   locationChange?: string;
   confidence: number;
   provider?: string;

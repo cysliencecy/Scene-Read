@@ -39,6 +39,13 @@ const getFallbackInsertAfterBlockId = (blocks: ChapterBlock[]) => {
   return paragraphIds[Math.min(1, paragraphIds.length - 1)];
 };
 
+const getDistributedFallbackBlockIds = (blocks: ChapterBlock[], count: number) => {
+  const paragraphIds = blocks.filter((block) => block.type === 'paragraph').map((block) => block.id);
+  if (paragraphIds.length === 0 || count <= 0) return [];
+  const ratios = count <= 1 ? [0.3] : count === 2 ? [0.3, 0.75] : [0.3, 0.6, 0.85];
+  return ratios.slice(0, count).map((ratio) => paragraphIds[Math.min(paragraphIds.length - 1, Math.floor(paragraphIds.length * ratio))]);
+};
+
 const withReaderGeneratedBlocks = (
   chapter: Chapter | null,
   tasks: GenerationTask[],
@@ -49,6 +56,8 @@ const withReaderGeneratedBlocks = (
   const chapterImages = images.filter((image) => image.chapterId === chapter.id);
   const chapterTasks = tasks.filter((task) => task.chapterId === chapter.id);
   const fallbackBlockId = getFallbackInsertAfterBlockId(chapter.blocks);
+  const fallbackImages = chapterImages.filter((image) => !image.sourceBlockId);
+  const fallbackBlockIds = getDistributedFallbackBlockIds(chapter.blocks, fallbackImages.length);
   const pendingTask = chapterTasks.find(isPendingTask);
   const imageIds = new Set(chapterImages.map((image) => image.id));
   const taskIds = new Set(chapterTasks.map((task) => task.id));
@@ -69,9 +78,15 @@ const withReaderGeneratedBlocks = (
       .forEach((image) => blocks.push({ id: `${image.id}-block`, type: 'scene-image', imageId: image.id }));
 
     if (!hasInlineImage && block.id === fallbackBlockId) {
-      chapterImages
-        .filter((image) => !image.sourceBlockId)
+      fallbackImages
+        .filter((_image, index) => !fallbackBlockIds[index])
         .forEach((image) => blocks.push({ id: `${image.id}-fallback-block`, type: 'scene-image', imageId: image.id }));
+    }
+
+    if (!hasInlineImage) {
+      fallbackImages
+        .filter((_image, index) => fallbackBlockIds[index] === block.id)
+        .forEach((image) => blocks.push({ id: `${image.id}-distributed-fallback-block`, type: 'scene-image', imageId: image.id }));
     }
 
     if (!hasInlineTask && pendingTask && chapterImages.length === 0 && block.id === fallbackBlockId) {
@@ -202,6 +217,31 @@ export default function App() {
       if (timer) clearInterval(timer);
     };
   }, [currentChapter, route.name]);
+
+  useEffect(() => {
+    if (route.name !== 'Reader' || !currentChapter) return;
+    const hasChapterTask = generationTasks.some((task) => task.chapterId === currentChapter.id);
+    const hasChapterImage = sceneImages.some((image) => image.chapterId === currentChapter.id);
+    if (hasChapterTask || hasChapterImage) return;
+
+    let cancelled = false;
+    async function submitMissingChapterTask() {
+      try {
+        const task = await submitChapterGenerationTask(currentChapter.id);
+        if (cancelled) return;
+        setGenerationTasks((current) => [...current.filter((item) => item.id !== task.id), task]);
+        setApiStatus('connected');
+      } catch {
+        if (cancelled) return;
+        setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
+      }
+    }
+
+    submitMissingChapterTask();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentChapter, generationTasks, route.name, sceneImages]);
 
   const navigate = (nextRoute: AppRoute) => {
     setNavigation((current) => ({ ...current, route: nextRoute }));

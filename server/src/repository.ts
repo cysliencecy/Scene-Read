@@ -90,6 +90,7 @@ const toSceneImage = (row: {
   chapter_id: string;
   source_block_id?: string | null;
   position?: number | null;
+  image_type?: 'scene' | 'character' | 'object' | null;
   variant: 'street' | 'office';
   prompt: string;
   image_path: string | null;
@@ -98,6 +99,7 @@ const toSceneImage = (row: {
   chapterId: row.chapter_id,
   sourceBlockId: row.source_block_id ?? undefined,
   position: row.position ?? undefined,
+  imageType: row.image_type ?? undefined,
   variant: row.variant,
   prompt: row.prompt,
   imagePath: row.image_path ?? undefined,
@@ -122,6 +124,7 @@ const toSceneCandidate = (row: {
   source_text: string | null;
   prompt_draft: string | null;
   final_prompt?: string | null;
+  image_type?: 'scene' | 'character' | 'object' | null;
   location_change?: string | null;
   confidence: number | string | null;
   provider?: string | null;
@@ -140,6 +143,7 @@ const toSceneCandidate = (row: {
   sourceText: row.source_text ?? '',
   promptDraft: row.prompt_draft ?? '',
   finalPrompt: row.final_prompt ?? undefined,
+  imageType: row.image_type ?? undefined,
   locationChange: row.location_change ?? undefined,
   confidence: Number(row.confidence ?? 0),
   provider: row.provider ?? undefined,
@@ -395,6 +399,7 @@ export async function createSceneImage(input: SceneImageInput): Promise<SceneIma
     chapter_id: input.chapterId,
     source_block_id: input.sourceBlockId ?? null,
     position: input.position ?? null,
+    image_type: input.imageType ?? 'scene',
     variant: input.variant ?? 'street',
     prompt: input.prompt,
     image_path: imagePath ?? null,
@@ -453,6 +458,7 @@ export async function createSceneCandidates(inputs: SceneCandidateInput[]): Prom
       sourceText: input.sourceText,
       promptDraft: input.promptDraft,
       finalPrompt: input.finalPrompt,
+      imageType: input.imageType ?? 'scene',
       locationChange: input.locationChange,
       confidence: input.confidence ?? 0,
       provider: input.provider,
@@ -474,6 +480,7 @@ export async function createSceneCandidates(inputs: SceneCandidateInput[]): Prom
     source_text: input.sourceText,
     prompt_draft: input.promptDraft,
     final_prompt: input.finalPrompt ?? null,
+    image_type: input.imageType ?? 'scene',
     location_change: input.locationChange ?? null,
     confidence: input.confidence ?? 0,
     provider: input.provider ?? null,
@@ -485,7 +492,10 @@ export async function createSceneCandidates(inputs: SceneCandidateInput[]): Prom
   const { data, error } = await supabase.from('scene_candidates').upsert(payload).select('*');
   if (error) {
     if (isMissingSceneCandidateTableError(error)) return [];
-    throw error;
+    const legacyPayload = payload.map(({ image_type: _imageType, ...item }) => item);
+    const legacyResult = await supabase.from('scene_candidates').upsert(legacyPayload).select('*');
+    if (legacyResult.error) throw error;
+    return legacyResult.data.map(toSceneCandidate);
   }
   return data.map(toSceneCandidate);
 }

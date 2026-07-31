@@ -39,12 +39,14 @@ type WorkerCandidatePayload = {
   sourceText?: string;
   promptDraft?: string;
   prompt?: string;
+  imageType?: 'scene' | 'character' | 'object';
   locationChange?: string;
   confidence?: number;
 };
 
 type WorkerSceneImagePayload = {
   sourceBlockId?: string;
+  imageType?: 'scene' | 'character' | 'object';
   prompt?: string;
   imageUrl?: string;
   imagePath?: string;
@@ -94,6 +96,7 @@ function listInMemorySceneCandidates(filters: { chapterId?: string; taskId?: str
       sourceText: candidate.sourceText ?? '',
       promptDraft: candidate.promptDraft ?? candidate.prompt ?? '',
       finalPrompt: findGeneratedPrompt(generatedImages, candidate),
+      imageType: candidate.imageType ?? 'scene',
       locationChange: candidate.locationChange,
       confidence: candidate.confidence ?? 0,
       provider: modelInfo.provider,
@@ -117,6 +120,7 @@ async function listImageBackfilledSceneCandidates(filters: { chapterId?: string;
     sourceText: image.prompt,
     promptDraft: image.prompt,
     finalPrompt: image.prompt,
+    imageType: image.imageType ?? 'scene',
     locationChange: 'Backfilled from generated image',
     confidence: 0,
     provider: 'backfill',
@@ -175,7 +179,7 @@ function runWorkerForTask(taskId: string) {
       '--image-provider',
       process.env.IMAGE_PROVIDER ?? 'mock-svg',
       '--max-images',
-      process.env.WORKER_MAX_IMAGES ?? '1',
+      process.env.WORKER_MAX_IMAGES ?? '3',
     ],
     {
       cwd: projectRoot,
@@ -503,6 +507,7 @@ app.post('/worker/scene-candidates', async (request, response, next) => {
           sourceText: candidate.sourceText ?? '',
           promptDraft: candidate.promptDraft ?? candidate.prompt ?? '',
           finalPrompt: findGeneratedPrompt(generatedImages, candidate),
+          imageType: candidate.imageType ?? 'scene',
           locationChange: candidate.locationChange,
           confidence: candidate.confidence ?? 0,
           provider: modelInfo.provider,

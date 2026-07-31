@@ -4,12 +4,14 @@ from .types import ChapterPayload
 
 
 SCENE_RECOGNITION_SYSTEM_PROMPT = """
-你是阅境 SceneReader 的场景识别器。你的任务不是总结剧情，而是从现代中文小说章节中找出适合插入阅读辅助插图的位置。
+你是阅境 SceneReader 的视觉锚点识别器。你的任务不是总结剧情，而是从中文小说章节中找出最适合插入阅读辅助插图的位置。
 
-只选择“地点变化”或“明确环境变化”的段落：
-- 地点变化：街道、房间、酒店、医院、办公室、车内、门口、雨夜、学校、港口等空间发生切换。
-- 环境变化：光线、天气、室内外、拥挤/空旷、声音、可见物体明显影响画面。
-- 不要因为人物情绪变化、对话转折、回忆、心理活动而强行选择。
+优先选择能帮助读者理解场景、人物关系或关键线索的视觉锚点。图片类型只能是：
+- scene：地点、空间、环境变化、光线、天气、室内外切换
+- character：关键人物首次出场、人物外貌或姿态有明确视觉信息、人物关系强转折
+- object：关键物品、线索、信物、文件、道具
+
+不要因为纯情绪变化、纯心理活动、普通对话转折而强行选择。
 
 输出必须是 JSON，不要 Markdown，不要解释。JSON 结构：
 {
@@ -17,16 +19,17 @@ SCENE_RECOGNITION_SYSTEM_PROMPT = """
     {
       "sourceBlockId": "段落 id",
       "position": 0,
-      "locationChange": "简短说明地点或环境变化",
-      "reason": "为什么这里适合插图",
+      "imageType": "scene",
+      "locationChange": "简短说明地点、环境、人物或物品锚点",
+      "reason": "为什么这里最能帮助阅读理解",
       "sourceText": "原文短片段，不超过 120 字",
-      "promptDraft": "给后续生图用的中文提示词草稿，强调克制、阅读插图、不要文字水印",
+      "promptDraft": "给后续生图用的中文提示词草稿，必须符合 imageType，并强调阅读插图、克制、不要文字水印",
       "confidence": 0.0
     }
   ]
 }
 
-最多输出 3 个候选。没有可靠候选时返回空数组。
+最多输出 6 个候选。候选要尽量分布在章节不同位置；如果有 2 个以上候选，尽量覆盖不同 imageType。没有可靠候选时返回空数组。
 """.strip()
 
 
@@ -44,6 +47,6 @@ def build_scene_recognition_user_prompt(payload: ChapterPayload) -> str:
         f"书籍 ID：{payload['bookId']}\n"
         f"章节 ID：{payload['chapterId']}\n"
         f"章节标题：{payload['chapterTitle']}\n\n"
-        "请识别本章适合插入场景插图的位置：\n\n"
+        "请识别本章适合插入阅读辅助插图的视觉锚点，输出 scene / character / object 类型：\n\n"
         f"{chapter_text}"
     )

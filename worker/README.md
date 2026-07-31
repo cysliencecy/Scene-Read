@@ -5,7 +5,7 @@ Python Worker for chapter text processing and scene recognition.
 Current T12 scope:
 
 - Read one chapter payload.
-- Use GLM through an OpenAI-compatible API when configured.
+- Use Kimi K3 through its Anthropic-compatible API when configured.
 - Output location/environment changes, source snippets, insertion positions, prompt drafts, validation logs.
 - Fall back to local heuristic recognition when no AI key is configured.
 - Generate at least one scene image from the selected prompt.
@@ -19,15 +19,15 @@ The `python` command on this machine currently points to Python 2.7. Use a Pytho
 
 ## AI Configuration
 
-Real AI recognition defaults to GLM:
+Real AI recognition defaults to Kimi K3:
 
 Option 1: create a local `worker/.env` file. This file is ignored by git.
 
 ```text
-GLM_API_KEY=your-glm-or-bigmodel-key
-AI_MODEL=glm-4-flash
-AI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
-AI_PROVIDER=openai
+KIMI_API_KEY=your-kimi-key
+AI_MODEL=kimi-k3
+AI_BASE_URL=https://api.kimi.com/coding
+AI_PROVIDER=anthropic
 ```
 
 You can copy from `worker/.env.example`.
@@ -35,13 +35,13 @@ You can copy from `worker/.env.example`.
 Option 2: set environment variables in the current shell.
 
 ```powershell
-$env:GLM_API_KEY="your-api-key"
-$env:AI_MODEL="glm-4-flash"
-$env:AI_BASE_URL="https://open.bigmodel.cn/api/paas/v4"
-$env:AI_PROVIDER="openai"
+$env:KIMI_API_KEY="your-api-key"
+$env:AI_MODEL="kimi-k3"
+$env:AI_BASE_URL="https://api.kimi.com/coding"
+$env:AI_PROVIDER="anthropic"
 ```
 
-`AI_MODEL` and `AI_BASE_URL` are optional because the Worker already defaults to the values above. `ZHIPU_API_KEY` and `BIGMODEL_API_KEY` are also accepted as fallback key names, but `GLM_API_KEY` is preferred. Kimi/Moonshot key names remain supported only as backward-compatible fallbacks.
+`AI_MODEL` and `AI_BASE_URL` are optional because the Worker already defaults to the values above. `MOONSHOT_API_KEY` is accepted as a backward-compatible fallback for `KIMI_API_KEY`.
 
 ## Image Generation Configuration
 

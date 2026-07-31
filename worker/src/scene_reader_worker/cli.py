@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .image_generator import generate_images_for_candidates
+from .image_generator import generate_images_for_candidates, target_image_count_for_paragraphs
 from .processor import process_chapter, result_to_dict
 from .types import ChapterPayload
 
@@ -94,13 +94,13 @@ def main() -> int:
     parser.add_argument("--output", help="Optional path to write worker result JSON.")
     parser.add_argument("--api-url", help="Optional API base URL for result callback.")
     parser.add_argument("--generate-images", action="store_true", help="Generate scene images for selected candidates.")
-    parser.add_argument("--image-provider", help="Image provider: pollinations or mock-svg.")
-    parser.add_argument("--max-images", type=int, default=1, help="Maximum scene images to generate.")
+    parser.add_argument("--image-provider", help="Image provider: pollinations, glm, or mock-svg.")
+    parser.add_argument("--max-images", type=int, default=3, help="Maximum scene images to generate.")
     parser.add_argument(
         "--provider",
         choices=["auto", "openai", "heuristic"],
         default="auto",
-        help="Scene recognition provider. auto uses Kimi/OpenAI-compatible AI when MOONSHOT_API_KEY exists, otherwise heuristic fallback.",
+        help="Scene recognition provider. auto uses configured OpenAI-compatible AI, otherwise heuristic fallback.",
     )
     args = parser.parse_args()
     started_at = time.perf_counter()
@@ -116,23 +116,25 @@ def main() -> int:
             _patch_task(
                 args.api_url,
                 args.task_id,
-                {"status": "recognizing", "progress": 20, "label": "正在识别章节场景"},
+                {"status": "recognizing", "progress": 20, "label": "正在识别章节视觉锚点"},
             )
 
         processed = process_chapter(payload, provider=args.provider)
         result = result_to_dict(processed)
 
         if args.generate_images:
+            target_images = target_image_count_for_paragraphs(len(payload["blocks"]), max_images=args.max_images)
             if args.task_id:
                 _patch_task(
                     args.api_url,
                     args.task_id,
-                    {"status": "generating", "progress": 60, "label": "正在生成场景图"},
+                    {"status": "generating", "progress": 60, "label": f"正在生成 {target_images} 张阅读辅助图"},
                 )
             generated_images = generate_images_for_candidates(
                 processed.candidates,
                 provider=args.image_provider,
                 max_images=args.max_images,
+                target_images=target_images,
             )
             result["generatedImages"] = [asdict(image) for image in generated_images]
 
@@ -150,7 +152,7 @@ def main() -> int:
                     {
                         "status": "completed",
                         "progress": 100,
-                        "label": "场景图已生成",
+                        "label": "阅读辅助图已生成",
                         "provider": processed.provider,
                         "durationMs": int((time.perf_counter() - started_at) * 1000),
                     },
@@ -166,7 +168,7 @@ def main() -> int:
                 {
                     "status": "failed",
                     "progress": 0,
-                    "label": "场景图生成失败",
+                    "label": "阅读辅助图生成失败",
                     "errorMessage": str(error),
                     "provider": args.provider,
                     "durationMs": int((time.perf_counter() - started_at) * 1000),

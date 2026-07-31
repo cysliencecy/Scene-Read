@@ -11,8 +11,8 @@ from .prompt import SCENE_RECOGNITION_SYSTEM_PROMPT, build_scene_recognition_use
 from .types import ChapterPayload, WorkerLog
 
 
-DEFAULT_AI_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
-DEFAULT_AI_MODEL = "glm-4-flash"
+DEFAULT_AI_BASE_URL = "https://api.kimi.com/coding"
+DEFAULT_AI_MODEL = "kimi-k3"
 
 
 class AiSceneRecognitionError(RuntimeError):
@@ -52,14 +52,15 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     return parsed
 
 
-def _get_api_key() -> str | None:
+def _get_api_key(base_url: str) -> str | None:
     _load_local_env()
+    if "api.kimi.com" in base_url:
+        return os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY")
+
     return (
         os.getenv("GLM_API_KEY")
         or os.getenv("ZHIPU_API_KEY")
         or os.getenv("BIGMODEL_API_KEY")
-        or os.getenv("MOONSHOT_API_KEY")
-        or os.getenv("KIMI_API_KEY")
         or os.getenv("OPENAI_API_KEY")
     )
 
@@ -141,11 +142,13 @@ def _recognize_scenes_with_anthropic(
 
 
 def recognize_scenes_with_openai(payload: ChapterPayload) -> tuple[list[dict[str, Any]], list[WorkerLog]]:
-    api_key = _get_api_key()
-    if not api_key:
-        raise AiSceneRecognitionError("GLM_API_KEY is not configured.")
-
+    _load_local_env()
     base_url = os.getenv("AI_BASE_URL", DEFAULT_AI_BASE_URL).rstrip("/")
+    api_key = _get_api_key(base_url)
+    if not api_key:
+        key_name = "KIMI_API_KEY" if "api.kimi.com" in base_url else "AI provider API key"
+        raise AiSceneRecognitionError(f"{key_name} is not configured.")
+
     model = os.getenv("AI_MODEL") or os.getenv("OPENAI_MODEL") or DEFAULT_AI_MODEL
     if _is_anthropic_compatible(base_url):
         return _recognize_scenes_with_anthropic(payload, api_key, base_url, model)
