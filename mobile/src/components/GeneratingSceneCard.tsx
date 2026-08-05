@@ -46,7 +46,7 @@ export function GeneratingSceneCard({
 
 const styles = StyleSheet.create({
   generatingCard: {
-    minHeight: 112,
+    height: 146,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: 'rgba(37,34,30,0.08)',
