@@ -1,108 +1,311 @@
-﻿import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { colors } from '../theme/colors';
+import { useRef } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import type { Chapter } from '../types/app';
+import type {
+  ReaderFontFamily,
+  ReaderFontSize,
+  ReaderLineSpacing,
+  ReaderPreferences,
+  ReaderTheme,
+} from '../reader/pagination';
 
-export type ReaderFontSize = '小' | '中' | '大';
-export type ReaderTheme = '纸张' | '暖色' | '夜间';
+export type ReaderControlPanel = 'chapters' | 'theme' | 'font' | null;
+
+const fontSizes: ReaderFontSize[] = ['小', '中', '大'];
+const lineSpacings: ReaderLineSpacing[] = ['紧凑', '标准', '宽松'];
+const fontFamilies: ReaderFontFamily[] = ['默认', '宋体'];
+const themes: Array<{ value: ReaderTheme; color: string }> = [
+  { value: '纸张', color: '#fbf8f1' },
+  { value: '暖色', color: '#f6ecd9' },
+  { value: '夜间', color: '#171916' },
+];
 
 export function ReaderControlsSheet({
-  fontSize,
-  theme,
-  progress,
-  onFontSizeChange,
-  onThemeChange,
-  onOpenSceneDebug,
+  activePanel,
+  chapters,
+  currentChapterId,
+  preferences,
+  onActivePanelChange,
+  onChapterChange,
+  onPreferencesChange,
 }: {
-  fontSize: ReaderFontSize;
-  theme: ReaderTheme;
-  progress: number;
-  onFontSizeChange: (fontSize: ReaderFontSize) => void;
-  onThemeChange: (theme: ReaderTheme) => void;
-  onOpenSceneDebug: () => void;
+  activePanel: ReaderControlPanel;
+  chapters: Chapter[];
+  currentChapterId: string;
+  preferences: ReaderPreferences;
+  onActivePanelChange: (panel: ReaderControlPanel) => void;
+  onChapterChange: (chapterId: string) => void;
+  onPreferencesChange: (preferences: ReaderPreferences) => void;
 }) {
+  const panelTouchStartY = useRef(0);
+  const isNight = preferences.theme === '夜间';
+  const panelStyle = [styles.panel, isNight && styles.panelNight];
+  const primaryTextStyle = [styles.primaryText, isNight && styles.primaryTextNight];
+  const secondaryTextStyle = [styles.secondaryText, isNight && styles.secondaryTextNight];
+
+  const updatePreference = <Key extends keyof ReaderPreferences>(key: Key, value: ReaderPreferences[Key]) => {
+    onPreferencesChange({ ...preferences, [key]: value });
+  };
+
+  if (activePanel === 'chapters') {
+    return (
+      <View style={styles.chapterOverlay} onTouchEnd={(event) => event.stopPropagation()}>
+        <View style={[styles.chapterDrawer, isNight && styles.chapterDrawerNight]}>
+          <View style={styles.chapterDrawerHeader}>
+            <Text style={[primaryTextStyle, styles.chapterDrawerTitle]}>章节目录</Text>
+            <Text style={secondaryTextStyle}>{chapters.length} 章</Text>
+          </View>
+          <ScrollView
+            contentContainerStyle={styles.chapterListContent}
+            showsVerticalScrollIndicator={false}
+            style={styles.chapterList}
+          >
+            {chapters.map((chapter, index) => {
+              const active = chapter.id === currentChapterId;
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  key={chapter.id}
+                  onPress={() => onChapterChange(chapter.id)}
+                  style={[styles.chapterRow, active && styles.chapterRowActive]}
+                >
+                  <Text style={[secondaryTextStyle, styles.chapterNumber, active && styles.activeText]}>
+                    {String(index + 1).padStart(2, '0')}
+                  </Text>
+                  <Text numberOfLines={2} style={[primaryTextStyle, styles.chapterTitle, active && styles.activeText]}>
+                    {chapter.title}
+                  </Text>
+                  {active && <Text style={styles.currentLabel}>当前</Text>}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+        <Pressable
+          accessibilityLabel="关闭章节目录"
+          accessibilityRole="button"
+          onPress={() => onActivePanelChange(null)}
+          style={styles.chapterDismissArea}
+        >
+          <View style={styles.chapterDismissIcon}>
+            <Text style={styles.chapterDismissText}>‹</Text>
+          </View>
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.controlsSheet}>
-      <Text style={styles.groupLabel}>字号</Text>
-      <View style={styles.controlRow}>
-        {(['小', '中', '大'] as ReaderFontSize[]).map((option) => (
-          <Pressable
-            accessibilityRole="button"
-            key={option}
-            onPress={() => onFontSizeChange(option)}
-            style={[styles.controlPill, fontSize === option && styles.controlPillActive]}
-          >
-            <Text style={[styles.controlText, fontSize === option && styles.controlTextActive]}>{option}</Text>
-          </Pressable>
-        ))}
-      </View>
+    <View
+      style={styles.shell}
+      onTouchStart={(event) => {
+        panelTouchStartY.current = event.nativeEvent.pageY;
+      }}
+      onTouchEnd={(event) => {
+        event.stopPropagation();
+        if (event.nativeEvent.pageY - panelTouchStartY.current > 40) onActivePanelChange(null);
+      }}
+    >
+      {activePanel === 'theme' && (
+        <View style={panelStyle}>
+          <Text style={primaryTextStyle}>阅读颜色</Text>
+          <View style={styles.optionRow}>
+            {themes.map((option) => {
+              const active = preferences.theme === option.value;
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  key={option.value}
+                  onPress={() => updatePreference('theme', option.value)}
+                  style={[styles.themeOption, active && styles.optionActive]}
+                >
+                  <View style={[styles.themeSwatch, { backgroundColor: option.color }]} />
+                  <Text style={[secondaryTextStyle, active && styles.activeText]}>{option.value}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      )}
 
-      <Text style={styles.groupLabel}>主题</Text>
-      <View style={styles.controlRow}>
-        {(['纸张', '暖色', '夜间'] as ReaderTheme[]).map((option) => (
-          <Pressable
-            accessibilityRole="button"
-            key={option}
-            onPress={() => onThemeChange(option)}
-            style={[styles.controlPill, theme === option && styles.controlPillActive]}
-          >
-            <Text style={[styles.controlText, theme === option && styles.controlTextActive]}>{option}</Text>
-          </Pressable>
-        ))}
-      </View>
+      {activePanel === 'font' && (
+        <View style={panelStyle}>
+          <Text style={primaryTextStyle}>字号</Text>
+          <View style={styles.optionRow}>
+            {fontSizes.map((option) => (
+              <OptionButton
+                active={preferences.fontSize === option}
+                isNight={isNight}
+                key={option}
+                label={option}
+                onPress={() => updatePreference('fontSize', option)}
+              />
+            ))}
+          </View>
+          <Text style={[primaryTextStyle, styles.groupLabel]}>行距</Text>
+          <View style={styles.optionRow}>
+            {lineSpacings.map((option) => (
+              <OptionButton
+                active={preferences.lineSpacing === option}
+                isNight={isNight}
+                key={option}
+                label={option}
+                onPress={() => updatePreference('lineSpacing', option)}
+              />
+            ))}
+          </View>
+          <Text style={[primaryTextStyle, styles.groupLabel]}>字体</Text>
+          <View style={styles.optionRow}>
+            {fontFamilies.map((option) => (
+              <OptionButton
+                active={preferences.fontFamily === option}
+                isNight={isNight}
+                key={option}
+                label={option}
+                onPress={() => updatePreference('fontFamily', option)}
+              />
+            ))}
+          </View>
+        </View>
+      )}
 
-      <Pressable accessibilityRole="button" onPress={onOpenSceneDebug} style={styles.debugButton}>
-        <Text style={styles.debugButtonText}>生成调试</Text>
-      </Pressable>
-
-      <View style={styles.slider}>
-        <View style={[styles.sliderFill, { width: `${progress}%` }]} />
+      <View style={[styles.toolbar, isNight && styles.toolbarNight]}>
+        {([
+          ['chapters', '章节'],
+          ['theme', '颜色'],
+          ['font', '字体'],
+        ] as const).map(([panel, label]) => {
+          const active = activePanel === panel;
+          return (
+            <Pressable
+              accessibilityRole="button"
+              key={panel}
+              onPress={() => onActivePanelChange(active ? null : panel)}
+              style={[styles.toolbarButton, active && styles.toolbarButtonActive]}
+            >
+              <Text style={[secondaryTextStyle, styles.toolbarIcon]}>{panel === 'chapters' ? '☰' : panel === 'theme' ? '◐' : 'Aa'}</Text>
+              <Text style={[secondaryTextStyle, active && styles.activeText]}>{label}</Text>
+            </Pressable>
+          );
+        })}
       </View>
-      <Text style={styles.sheetProgress}>本章 {progress}%</Text>
     </View>
   );
 }
 
+function OptionButton({
+  active,
+  isNight,
+  label,
+  onPress,
+}: {
+  active: boolean;
+  isNight: boolean;
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={[styles.optionButton, isNight && styles.optionButtonNight, active && styles.optionActive]}
+    >
+      <Text style={[styles.secondaryText, isNight && styles.secondaryTextNight, active && styles.activeText]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
-  controlsSheet: {
+  shell: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  chapterOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  chapterDrawer: {
+    width: '82%',
+    height: '100%',
+    paddingTop: 28,
+    paddingHorizontal: 20,
+    backgroundColor: '#fbf8f1',
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(37,34,30,0.12)',
+  },
+  chapterDrawerNight: {
+    backgroundColor: '#1f211d',
+    borderRightColor: 'rgba(255,255,255,0.12)',
+  },
+  chapterDrawerHeader: {
+    paddingHorizontal: 8,
+    paddingBottom: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(109,137,124,0.18)',
+  },
+  chapterDrawerTitle: { fontSize: 20 },
+  chapterDismissArea: {
+    flex: 1,
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.32)',
+  },
+  chapterDismissIcon: {
+    width: 34,
+    height: 54,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  chapterDismissText: { color: '#fff', fontSize: 34, lineHeight: 36 },
+  panel: {
+    maxHeight: 340,
     paddingHorizontal: 22,
     paddingTop: 18,
-    paddingBottom: 28,
+    paddingBottom: 16,
     backgroundColor: 'rgba(251,248,241,0.98)',
     borderTopWidth: 1,
-    borderTopColor: colors.line,
+    borderTopColor: 'rgba(37,34,30,0.1)',
   },
-  groupLabel: {
-    color: colors.muted,
-    fontSize: 12,
-    fontWeight: '800',
-    marginBottom: 8,
-  },
-  controlRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
-  controlPill: {
-    flex: 1,
-    height: 42,
-    borderRadius: 16,
+  panelNight: { backgroundColor: 'rgba(31,33,29,0.98)', borderTopColor: 'rgba(255,255,255,0.12)' },
+  toolbar: {
+    height: 72,
+    paddingHorizontal: 34,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f0eadf',
-    borderWidth: 1,
-    borderColor: 'transparent',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(251,248,241,0.99)',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(37,34,30,0.1)',
   },
-  controlPillActive: {
-    backgroundColor: colors.sageSoft,
-    borderColor: 'rgba(32,54,48,0.32)',
-  },
-  controlText: { color: colors.deep, fontSize: 13, fontWeight: '800' },
-  controlTextActive: { color: colors.deep },
-  debugButton: {
-    height: 42,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.deep,
-    marginBottom: 16,
-  },
-  debugButtonText: { color: '#fff', fontSize: 13, fontWeight: '900' },
-  slider: { height: 4, borderRadius: 9, backgroundColor: '#dfd5c6', overflow: 'hidden' },
-  sliderFill: { width: '46%', height: '100%', borderRadius: 9, backgroundColor: colors.deep },
-  sheetProgress: { marginTop: 10, color: colors.muted, fontSize: 12, textAlign: 'center' },
+  toolbarNight: { backgroundColor: 'rgba(23,25,22,0.99)', borderTopColor: 'rgba(255,255,255,0.12)' },
+  toolbarButton: { minWidth: 72, height: 58, alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 16 },
+  toolbarButtonActive: { backgroundColor: 'rgba(109,137,124,0.16)' },
+  toolbarIcon: { fontSize: 18, lineHeight: 22 },
+  primaryText: { color: '#28231d', fontSize: 14, fontWeight: '800' },
+  primaryTextNight: { color: '#f3ead7' },
+  secondaryText: { color: '#756f64', fontSize: 13, fontWeight: '700' },
+  secondaryTextNight: { color: '#bdb3a2' },
+  activeText: { color: '#4d7565' },
+  chapterList: { flex: 1 },
+  chapterListContent: { paddingTop: 12, paddingBottom: 28 },
+  chapterRow: { minHeight: 56, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 12 },
+  chapterNumber: { width: 24, fontVariant: ['tabular-nums'] },
+  chapterRowActive: { backgroundColor: 'rgba(109,137,124,0.14)' },
+  chapterTitle: { flex: 1 },
+  currentLabel: { color: '#4d7565', fontSize: 11, fontWeight: '800' },
+  optionRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  optionButton: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#f0eadf' },
+  optionButtonNight: { backgroundColor: '#30332e' },
+  optionActive: { borderWidth: 1, borderColor: '#6d897c', backgroundColor: 'rgba(109,137,124,0.16)' },
+  themeOption: { flex: 1, height: 72, alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14 },
+  themeSwatch: { width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(37,34,30,0.14)' },
+  groupLabel: { marginTop: 18 },
 });

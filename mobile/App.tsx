@@ -7,6 +7,7 @@ import {
   deleteBook,
   fetchBooks,
   fetchChapter,
+  fetchChapters,
   fetchGenerationTasks,
   fetchSceneImages,
   fetchSceneCandidates,
@@ -21,7 +22,8 @@ import {
   type AppRoute,
 } from './src/navigation/routes';
 import { ImportScreen } from './src/screens/ImportScreen';
-import { ReaderScreen } from './src/screens/ReaderScreen';
+import { ReaderScreen, type ReaderChapterEntry } from './src/screens/ReaderScreen';
+import { loadLastReaderChapter, saveLastReaderChapter } from './src/reader/storage';
 import { SceneDebugScreen } from './src/screens/SceneDebugScreen';
 import { ShelfScreen } from './src/screens/ShelfScreen';
 import { StyleScreen } from './src/screens/StyleScreen';
@@ -108,7 +110,7 @@ export default function App() {
   const [pendingImportDraft, setPendingImportDraft] = useState<ImportedBookDraft | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
-  const [showControls, setShowControls] = useState(false);
+  const [readerChapterEntry, setReaderChapterEntry] = useState<ReaderChapterEntry>('saved');
   const [isEditingShelf, setIsEditingShelf] = useState(false);
   const [selectedImportedBookIds, setSelectedImportedBookIds] = useState<string[]>([]);
   const route = navigation.route;
@@ -124,6 +126,10 @@ export default function App() {
   const renderedChapter = useMemo(
     () => withReaderGeneratedBlocks(currentChapter, generationTasks, sceneImages),
     [currentChapter, generationTasks, sceneImages],
+  );
+  const currentBookChapters = useMemo(
+    () => Object.values(chaptersById).filter((chapter) => chapter.bookId === currentBook?.id),
+    [chaptersById, currentBook?.id],
   );
   const title = useMemo(() => getRouteTitle(route, currentChapter?.title), [currentChapter?.title, route]);
 
@@ -184,6 +190,36 @@ export default function App() {
       cancelled = true;
     };
   }, [chaptersById, navigation.selectedChapterId]);
+
+  useEffect(() => {
+    if (route.name !== 'Reader' || !navigation.selectedBookId) return;
+    let cancelled = false;
+
+    async function loadBookChapters() {
+      try {
+        const chapters = await fetchChapters(navigation.selectedBookId);
+        if (cancelled) return;
+        setChaptersById((current) => {
+          const next = Object.fromEntries(
+            Object.entries(current).filter(([, chapter]) => chapter.bookId !== navigation.selectedBookId),
+          );
+          chapters.forEach((chapter) => {
+            next[chapter.id] = chapter;
+          });
+          return next;
+        });
+        setApiStatus('connected');
+      } catch {
+        if (cancelled) return;
+        setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
+      }
+    }
+
+    loadBookChapters();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigation.selectedBookId, route.name]);
 
   useEffect(() => {
     if ((route.name !== 'Reader' && route.name !== 'SceneDebug') || !currentChapter) return;
@@ -247,16 +283,24 @@ export default function App() {
     setNavigation((current) => ({ ...current, route: nextRoute }));
   };
 
-  const openBook = (bookId: string) => {
+  const openBook = async (bookId: string) => {
     const book = shelfBooks.find((item) => item.id === bookId);
     if (!book) return;
 
+    const savedChapterId = await loadLastReaderChapter(book.id).catch(() => null);
+    setReaderChapterEntry('saved');
     setNavigation((current) => ({
       ...current,
       selectedBookId: book.id,
-      selectedChapterId: book.currentChapterId,
+      selectedChapterId: savedChapterId ?? book.currentChapterId,
       route: { name: 'Reader' },
     }));
+  };
+
+  const selectReaderChapter = (chapterId: string, entry: ReaderChapterEntry) => {
+    setReaderChapterEntry(entry);
+    if (currentBook) saveLastReaderChapter(currentBook.id, chapterId).catch(() => undefined);
+    setNavigation((current) => ({ ...current, selectedChapterId: chapterId }));
   };
 
   const clearShelfEditing = () => {
@@ -436,6 +480,8 @@ export default function App() {
         selectedChapterId: displayBook.currentChapterId,
         route: { name: 'Reader' },
       }));
+      setReaderChapterEntry('start');
+      saveLastReaderChapter(displayBook.id, displayBook.currentChapterId).catch(() => undefined);
       setPendingImportDraft(null);
       return;
     }
@@ -444,7 +490,10 @@ export default function App() {
   };
 
   const goBack = () => {
-    if (route.name === 'SceneDebug') navigate({ name: 'Reader' });
+    if (route.name === 'SceneDebug') {
+      setReaderChapterEntry('saved');
+      navigate({ name: 'Reader' });
+    }
     if (route.name === 'Reader') navigate({ name: 'Shelf' });
     if (route.name === 'Style') navigate({ name: 'Import' });
     if (route.name === 'Import') navigate({ name: 'Shelf' });
@@ -474,25 +523,15 @@ export default function App() {
             onToggleBookSelection={toggleBookSelection}
             onToggleEditingShelf={toggleShelfEditing}
           />
-        ) : (
+        ) : route.name !== 'Reader' ? (
           <View style={styles.header}>
             <Pressable accessibilityRole="button" onPress={goBack} style={styles.roundButton}>
               <Text style={styles.roundButtonText}>{'<'}</Text>
             </Pressable>
             <Text style={styles.headerTitle}>{title}</Text>
-            {route.name === 'Reader' ? (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setShowControls((value) => !value)}
-                style={styles.roundButton}
-              >
-                <Text style={styles.menuText}>?</Text>
-              </Pressable>
-            ) : (
-              <View style={styles.headerSpacer} />
-            )}
+            <View style={styles.headerSpacer} />
           </View>
-        )}
+        ) : null}
 
         {route.name === 'Import' && (
           <ImportScreen
@@ -513,13 +552,13 @@ export default function App() {
           (renderedChapter ? (
             <ReaderScreen
               chapter={renderedChapter}
+              chapters={currentBookChapters.length > 0 ? currentBookChapters : [renderedChapter]}
+              chapterEntry={readerChapterEntry}
               generationTasks={generationTasks}
               sceneImages={sceneImages}
-              visualStyle={navigation.visualStyle}
-              showControls={showControls}
-              onCloseControls={() => setShowControls(false)}
+              onBack={goBack}
+              onChapterChange={selectReaderChapter}
               onOpenSceneDebug={() => {
-                setShowControls(false);
                 navigate({ name: 'SceneDebug' });
               }}
               onRetryGenerationTask={retrySceneGeneration}
@@ -595,11 +634,6 @@ const styles = StyleSheet.create({
     color: colors.deep,
     fontSize: 30,
     lineHeight: 32,
-  },
-  menuText: {
-    color: colors.deep,
-    fontSize: 20,
-    fontWeight: '800',
   },
   headerSpacer: {
     width: 38,

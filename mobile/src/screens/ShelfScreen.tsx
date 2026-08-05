@@ -1,7 +1,11 @@
+import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme/colors';
 import { sharedStyles } from '../theme/sharedStyles';
 import type { Book } from '../types/app';
+
+const BOOK_GRID_GAP = 14;
+const BOOK_COVER_ASPECT_RATIO = 104 / 152;
 
 export function ShelfScreen({
   books,
@@ -24,8 +28,11 @@ export function ShelfScreen({
   onToggleBookSelection: (bookId: string) => void;
   onToggleEditingShelf: () => void;
 }) {
+  const [bookGridWidth, setBookGridWidth] = useState(0);
   const featuredBook = books.find((book) => book.id === featuredBookId) ?? books[0];
   const selectedCount = selectedBookIds.length;
+  const bookCoverWidth =
+    bookGridWidth > 0 ? Math.max(0, (bookGridWidth - BOOK_GRID_GAP * 2) / 3) : 104;
 
   return (
     <View style={styles.shell}>
@@ -71,7 +78,13 @@ export function ShelfScreen({
           </View>
         </View>
 
-        <View style={styles.bookGrid}>
+        <View
+          onLayout={(event) => {
+            const nextWidth = event.nativeEvent.layout.width;
+            setBookGridWidth((currentWidth) => (currentWidth === nextWidth ? currentWidth : nextWidth));
+          }}
+          style={styles.bookGrid}
+        >
           {books.map((book) => {
             const canRemove = book.id.startsWith('import-');
             const selected = selectedBookIds.includes(book.id);
@@ -90,6 +103,7 @@ export function ShelfScreen({
                 }}
                 style={[
                   styles.bookCover,
+                  { width: bookCoverWidth },
                   { backgroundColor: book.accent },
                   isEditingShelf && !canRemove && styles.bookCoverLocked,
                   selected && styles.bookCoverSelected,
@@ -107,7 +121,12 @@ export function ShelfScreen({
             );
           })}
 
-          <Pressable accessibilityRole="button" disabled={isEditingShelf} onPress={onImport} style={styles.importBookCover}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={isEditingShelf}
+            onPress={onImport}
+            style={[styles.importBookCover, { width: bookCoverWidth }]}
+          >
             <View style={styles.importBookIcon}>
               <Text style={styles.importBookPlus}>＋</Text>
             </View>
@@ -193,10 +212,9 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(32,54,48,0.16)',
   },
   sectionActionText: { color: colors.deep, fontSize: 12, fontWeight: '800' },
-  bookGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, paddingBottom: 72 },
+  bookGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: BOOK_GRID_GAP, paddingBottom: 72 },
   bookCover: {
-    width: 104,
-    height: 152,
+    aspectRatio: BOOK_COVER_ASPECT_RATIO,
     borderRadius: 13,
     padding: 12,
     justifyContent: 'flex-end',
@@ -234,8 +252,7 @@ const styles = StyleSheet.create({
   bookTitle: { color: '#fff', fontSize: 13, lineHeight: 18, fontWeight: '800' },
   bookMeta: { marginTop: 5, color: 'rgba(255,255,255,0.78)', fontSize: 10 },
   importBookCover: {
-    width: 104,
-    height: 152,
+    aspectRatio: BOOK_COVER_ASPECT_RATIO,
     borderRadius: 13,
     borderWidth: 1,
     borderStyle: 'dashed',

@@ -1,205 +1,381 @@
-﻿import { useMemo, useState } from 'react';
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { GeneratingSceneCard } from '../components/GeneratingSceneCard';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ReaderControlsSheet,
-  type ReaderFontSize,
-  type ReaderTheme,
-} from '../components/ReaderControlsSheet';
-import { ReaderParagraph } from '../components/ReaderParagraph';
+  FlatList,
+  type GestureResponderEvent,
+  Image,
+  type LayoutChangeEvent,
+  Modal,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { GeneratingSceneCard } from '../components/GeneratingSceneCard';
+import { ReaderControlsSheet, type ReaderControlPanel } from '../components/ReaderControlsSheet';
 import { SceneImage } from '../components/SceneImage';
-import { colors } from '../theme/colors';
-import type { Chapter, GenerationTask, SceneImage as SceneImageData, VisualStyle } from '../types/app';
+import {
+  DEFAULT_READER_PREFERENCES,
+  findPageForAnchor,
+  getReaderTypography,
+  paginateChapter,
+  type ReaderAnchor,
+  type ReaderPage,
+  type ReaderPreferences,
+} from '../reader/pagination';
+import {
+  loadReaderPosition,
+  loadReaderPreferences,
+  saveReaderPosition,
+  saveReaderPreferences,
+} from '../reader/storage';
+import type { Chapter, GenerationTask, SceneImage as SceneImageData } from '../types/app';
+
+export type ReaderChapterEntry = 'saved' | 'start' | 'end';
 
 const readerThemeTokens: Record<
-  ReaderTheme,
-  {
-    background: string;
-    text: string;
-    title: string;
-    hint: string;
-    progressTrack: string;
-    progressFill: string;
-  }
+  ReaderPreferences['theme'],
+  { background: string; text: string; title: string; hint: string; overlay: string; border: string }
 > = {
   纸张: {
-    background: colors.paper,
+    background: '#fbf8f1',
     text: '#28231d',
-    title: colors.ink,
-    hint: colors.muted,
-    progressTrack: '#e4d9c8',
-    progressFill: colors.deep,
+    title: '#25221e',
+    hint: '#756f64',
+    overlay: 'rgba(251,248,241,0.96)',
+    border: 'rgba(37,34,30,0.1)',
   },
   暖色: {
     background: '#f6ecd9',
     text: '#30251a',
     title: '#2b2117',
     hint: '#806b50',
-    progressTrack: '#e7d1ad',
-    progressFill: '#7c5a2f',
+    overlay: 'rgba(246,236,217,0.96)',
+    border: 'rgba(92,67,37,0.12)',
   },
   夜间: {
     background: '#171916',
     text: '#ded7c8',
     title: '#f3ead7',
     hint: '#a59b8a',
-    progressTrack: '#3a3932',
-    progressFill: '#9fbaaa',
+    overlay: 'rgba(23,25,22,0.96)',
+    border: 'rgba(255,255,255,0.12)',
   },
 };
 
-const fontSizeTokens: Record<ReaderFontSize, { paragraph: number; lineHeight: number }> = {
-  小: { paragraph: 15, lineHeight: 30 },
-  中: { paragraph: 17, lineHeight: 34 },
-  大: { paragraph: 19, lineHeight: 38 },
-};
+type RestoreTarget = ReaderAnchor | 'loading' | 'start' | 'end' | null;
 
 export function ReaderScreen({
   chapter,
+  chapters,
+  chapterEntry,
   generationTasks,
   sceneImages,
-  visualStyle,
-  showControls,
-  onCloseControls,
+  onBack,
+  onChapterChange,
   onOpenSceneDebug,
   onRetryGenerationTask,
 }: {
   chapter: Chapter;
+  chapters: Chapter[];
+  chapterEntry: ReaderChapterEntry;
   generationTasks: GenerationTask[];
   sceneImages: SceneImageData[];
-  visualStyle: VisualStyle;
-  showControls: boolean;
-  onCloseControls: () => void;
+  onBack: () => void;
+  onChapterChange: (chapterId: string, entry: ReaderChapterEntry) => void;
   onOpenSceneDebug: () => void;
   onRetryGenerationTask: (taskId: string) => void;
 }) {
-  const [fontSize, setFontSize] = useState<ReaderFontSize>('中');
-  const [theme, setTheme] = useState<ReaderTheme>('纸张');
+  const listRef = useRef<FlatList<ReaderPage>>(null);
+  const touchStart = useRef({ x: 0, y: 0, time: 0 });
+  const currentAnchor = useRef<ReaderAnchor>({ blockId: `${chapter.id}:title`, offset: 0 });
+  const restoreTarget = useRef<RestoreTarget>('loading');
+  const [restoreVersion, setRestoreVersion] = useState(0);
+  const [layout, setLayout] = useState({ width: 0, height: 0 });
+  const [preferences, setPreferences] = useState(DEFAULT_READER_PREFERENCES);
+  const [preferencesHydrated, setPreferencesHydrated] = useState(false);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [controlsVisible, setControlsVisible] = useState(false);
+  const [activePanel, setActivePanel] = useState<ReaderControlPanel>(null);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
-  const themeTokens = readerThemeTokens[theme];
-  const typography = fontSizeTokens[fontSize];
-  const readerStyle = useMemo(
-    () => [styles.readerShell, { backgroundColor: themeTokens.background }],
-    [themeTokens.background],
+  const themeTokens = readerThemeTokens[preferences.theme];
+  const typography = getReaderTypography(preferences);
+  const fontFamily =
+    preferences.fontFamily === '宋体'
+      ? Platform.select({ ios: 'Songti SC', android: 'serif', web: 'SimSun, Songti SC, serif' })
+      : undefined;
+  const pages = useMemo(
+    () =>
+      layout.width > 0 && layout.height > 0
+        ? paginateChapter({
+            chapter,
+            contentWidth: Math.max(layout.width - 48, 120),
+            contentHeight: Math.max(layout.height - 68, 120),
+            preferences,
+          })
+        : [],
+    [chapter, layout.height, layout.width, preferences],
   );
-  const chapterSceneImages = useMemo(
-    () => sceneImages.filter((image) => image.chapterId === chapter.id),
-    [chapter.id, sceneImages],
-  );
-  const chapterGenerationTasks = useMemo(
-    () => generationTasks.filter((task) => task.chapterId === chapter.id),
-    [chapter.id, generationTasks],
-  );
-  const hasGeneratedSceneImages = chapterSceneImages.length > 0;
-  const hasActiveGenerationTasks = chapterGenerationTasks.some(
-    (task) => task.status === 'queued' || task.status === 'recognizing' || task.status === 'generating',
-  );
-  const fallbackGenerationTasks = chapterGenerationTasks.filter(
-    (task) => !hasGeneratedSceneImages || task.status === 'failed',
-  );
-  const hasInlineSceneImageBlocks = chapter.blocks.some((block) => block.type === 'scene-image');
-  const hasInlineGenerationTaskBlocks = chapter.blocks.some((block) => block.type === 'scene-placeholder');
 
-  return (
-    <View style={readerStyle}>
-      <ScrollView style={styles.readerScroll} contentContainerStyle={styles.readerContent}>
-        {(hasActiveGenerationTasks || hasGeneratedSceneImages) && (
-          <View style={styles.toast}>
-            <Text style={styles.toastDot}>◌</Text>
-            <Text style={styles.toastText}>
-              {hasGeneratedSceneImages ? '场景图已生成，正在按章节位置展示。' : '场景图正在后台生成，你可以先阅读原文。'}
-            </Text>
-          </View>
-        )}
+  const currentChapterIndex = chapters.findIndex((item) => item.id === chapter.id);
+  const progress = pages.length > 0 ? Math.round(((currentPage + 1) / pages.length) * 100) : 0;
 
-        <Text style={[styles.chapterTitle, { color: themeTokens.title }]}>{chapter.title}</Text>
-        {chapter.blocks.map((block) => {
-          if (block.type === 'paragraph') {
-            return (
-              <ReaderParagraph
-                key={block.id}
-                color={themeTokens.text}
-                fontSize={typography.paragraph}
-                lineHeight={typography.lineHeight}
-              >
-                {block.text}
-              </ReaderParagraph>
-            );
-          }
+  useEffect(() => {
+    let cancelled = false;
+    loadReaderPreferences().then((saved) => {
+      if (cancelled) return;
+      setPreferences(saved);
+      setPreferencesHydrated(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-          if (block.type === 'scene-placeholder') {
-            const task = generationTasks.find((item) => item.id === block.taskId);
-            if (!task) return null;
-            return (
-              <GeneratingSceneCard
-                key={block.id}
-                errorMessage={task.errorMessage}
-                progress={task.progress}
-                label={task.label}
-                onRetry={() => onRetryGenerationTask(task.id)}
-                status={task.status}
-              />
-            );
-          }
+  useEffect(() => {
+    if (!preferencesHydrated) return;
+    saveReaderPreferences(preferences).catch(() => undefined);
+  }, [preferences, preferencesHydrated]);
 
-          const image = sceneImages.find((item) => item.id === block.imageId);
-          if (!image) return null;
+  useEffect(() => {
+    let cancelled = false;
+    restoreTarget.current = 'loading';
+    setCurrentPage(0);
+    setControlsVisible(false);
+    setActivePanel(null);
+
+    if (chapterEntry === 'start' || chapterEntry === 'end') {
+      restoreTarget.current = chapterEntry;
+      setRestoreVersion((value) => value + 1);
+    } else {
+      loadReaderPosition(chapter.bookId, chapter.id).then((anchor) => {
+        if (cancelled) return;
+        restoreTarget.current = anchor ?? 'start';
+        setRestoreVersion((value) => value + 1);
+      });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chapter.bookId, chapter.id, chapterEntry]);
+
+  const scrollToPage = useCallback(
+    (pageIndex: number, animated: boolean) => {
+      if (layout.width <= 0 || pages.length === 0) return;
+      const nextIndex = Math.max(0, Math.min(pageIndex, pages.length - 1));
+      requestAnimationFrame(() => {
+        listRef.current?.scrollToOffset({ offset: nextIndex * layout.width, animated });
+      });
+      setCurrentPage(nextIndex);
+      currentAnchor.current = pages[nextIndex].anchor;
+    },
+    [layout.width, pages],
+  );
+
+  useEffect(() => {
+    if (pages.length === 0 || restoreTarget.current === 'loading') return;
+    let targetIndex = 0;
+    if (restoreTarget.current === 'end') targetIndex = pages.length - 1;
+    if (typeof restoreTarget.current === 'object' && restoreTarget.current) {
+      targetIndex = findPageForAnchor(pages, restoreTarget.current);
+    }
+    restoreTarget.current = null;
+    scrollToPage(targetIndex, false);
+  }, [pages, restoreVersion, scrollToPage]);
+
+  useEffect(() => {
+    if (pages.length === 0 || restoreTarget.current !== null) return;
+    scrollToPage(findPageForAnchor(pages, currentAnchor.current), false);
+  }, [pages, scrollToPage]);
+
+  const recordPage = useCallback(
+    (pageIndex: number) => {
+      if (!pages[pageIndex]) return;
+      setCurrentPage(pageIndex);
+      currentAnchor.current = pages[pageIndex].anchor;
+      saveReaderPosition(chapter.bookId, chapter.id, pages[pageIndex].anchor).catch(() => undefined);
+    },
+    [chapter.bookId, chapter.id, pages],
+  );
+
+  const goToAdjacentChapter = useCallback(
+    (direction: -1 | 1) => {
+      const nextChapter = chapters[currentChapterIndex + direction];
+      if (!nextChapter) return;
+      onChapterChange(nextChapter.id, direction > 0 ? 'start' : 'end');
+    },
+    [chapters, currentChapterIndex, onChapterChange],
+  );
+
+  const goToRelativePage = useCallback(
+    (direction: -1 | 1) => {
+      const nextPage = currentPage + direction;
+      if (nextPage >= 0 && nextPage < pages.length) {
+        scrollToPage(nextPage, true);
+        recordPage(nextPage);
+        return;
+      }
+      goToAdjacentChapter(direction);
+    },
+    [currentPage, goToAdjacentChapter, pages.length, recordPage, scrollToPage],
+  );
+
+  const handleTouchStart = (event: GestureResponderEvent) => {
+    touchStart.current = {
+      x: event.nativeEvent.pageX,
+      y: event.nativeEvent.pageY,
+      time: Date.now(),
+    };
+  };
+
+  const handleTouchEnd = (event: GestureResponderEvent) => {
+    const deltaX = event.nativeEvent.pageX - touchStart.current.x;
+    const deltaY = event.nativeEvent.pageY - touchStart.current.y;
+    const duration = Date.now() - touchStart.current.time;
+
+    if (Math.abs(deltaX) > 44 && Math.abs(deltaX) > Math.abs(deltaY)) {
+      if (currentPage === pages.length - 1 && deltaX < 0) goToAdjacentChapter(1);
+      if (currentPage === 0 && deltaX > 0) goToAdjacentChapter(-1);
+      return;
+    }
+
+    if (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8 || duration > 350 || layout.width === 0) return;
+    const localX = event.nativeEvent.locationX;
+    if (localX < layout.width * 0.25) {
+      goToRelativePage(-1);
+    } else if (localX > layout.width * 0.75) {
+      goToRelativePage(1);
+    } else {
+      setControlsVisible((visible) => {
+        if (visible) setActivePanel(null);
+        return !visible;
+      });
+    }
+  };
+
+  const handleMomentumScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (layout.width <= 0) return;
+    recordPage(Math.round(event.nativeEvent.contentOffset.x / layout.width));
+  };
+
+  const handleLayout = (event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setLayout((current) => (current.width === width && current.height === height ? current : { width, height }));
+  };
+
+  const renderPage = ({ item: page }: { item: ReaderPage }) => (
+    <View style={[styles.page, { width: layout.width }]}>
+      {page.items.map((item) => {
+        if (item.type === 'title') {
           return (
-            <SceneImage
-              key={block.id}
-              imageUrl={image.imageUrl}
-              variant={image.variant}
-              onPreview={setPreviewImageUrl}
-            />
+            <Text key={item.key} style={[styles.chapterTitle, { color: themeTokens.title, fontFamily }]}>
+              {item.text}
+            </Text>
           );
-        })}
-
-        {!hasInlineSceneImageBlocks &&
-          chapterSceneImages.map((image) => (
-            <SceneImage
-              key={image.id}
-              imageUrl={image.imageUrl}
-              variant={image.variant}
-              onPreview={setPreviewImageUrl}
-            />
-          ))}
-
-        {!hasInlineGenerationTaskBlocks &&
-          fallbackGenerationTasks.map((task) => (
+        }
+        if (item.type === 'paragraph') {
+          return (
+            <Text
+              key={item.key}
+              style={{
+                color: themeTokens.text,
+                fontFamily,
+                fontSize: typography.fontSize,
+                lineHeight: typography.lineHeight,
+                marginBottom: item.isLastFragment ? 16 : 0,
+              }}
+            >
+              {item.text}
+            </Text>
+          );
+        }
+        if (item.type === 'scene-placeholder') {
+          const task = generationTasks.find((candidate) => candidate.id === item.block.taskId);
+          return task ? (
             <GeneratingSceneCard
-              key={task.id}
+              key={item.key}
               errorMessage={task.errorMessage}
               progress={task.progress}
               label={task.label}
               onRetry={() => onRetryGenerationTask(task.id)}
               status={task.status}
             />
-          ))}
+          ) : null;
+        }
+        const image = sceneImages.find((candidate) => candidate.id === item.block.imageId);
+        return image ? (
+          <SceneImage
+            key={item.key}
+            imageUrl={image.imageUrl}
+            variant={image.variant}
+            onPreview={setPreviewImageUrl}
+          />
+        ) : null;
+      })}
+    </View>
+  );
 
-        <Text style={[styles.readerHint, { color: themeTokens.hint }]}>当前风格：{visualStyle}</Text>
-      </ScrollView>
-
-      <View style={[styles.readingProgress, { backgroundColor: themeTokens.progressTrack }]}>
-        <View
-          style={[
-            styles.readingProgressFill,
-            { width: `${chapter.progress}%`, backgroundColor: themeTokens.progressFill },
-          ]}
-        />
+  return (
+    <View onLayout={handleLayout} style={[styles.readerShell, { backgroundColor: themeTokens.background }]}>
+      <View style={styles.pageGestureArea} onTouchEnd={handleTouchEnd} onTouchStart={handleTouchStart}>
+        {layout.width > 0 && (
+          <FlatList
+            data={pages}
+            decelerationRate="fast"
+            getItemLayout={(_data, index) => ({ length: layout.width, offset: layout.width * index, index })}
+            horizontal
+            keyExtractor={(page) => page.key}
+            onMomentumScrollEnd={handleMomentumScrollEnd}
+            pagingEnabled
+            ref={listRef}
+            renderItem={renderPage}
+            showsHorizontalScrollIndicator={false}
+            style={styles.pageList}
+          />
+        )}
       </View>
 
-      {showControls && (
-        <Pressable style={styles.controlsBackdrop} onPress={onCloseControls}>
+      {!controlsVisible && pages.length > 0 && (
+        <Text pointerEvents="none" style={[styles.pageIndicator, { color: themeTokens.hint }]}>
+          {currentPage + 1} / {pages.length}
+        </Text>
+      )}
+
+      {controlsVisible && (
+        <>
+          <View style={[styles.readerHeader, { backgroundColor: themeTokens.overlay, borderBottomColor: themeTokens.border }]}>
+            <Pressable accessibilityRole="button" onPress={onBack} style={styles.headerButton}>
+              <Text style={[styles.backText, { color: themeTokens.text }]}>{'‹'}</Text>
+            </Pressable>
+            <Text numberOfLines={1} style={[styles.headerTitle, { color: themeTokens.title }]}>
+              {chapter.title}
+            </Text>
+            <Pressable accessibilityRole="button" onPress={onOpenSceneDebug} style={styles.headerButton}>
+              <Text style={[styles.debugText, { color: themeTokens.text }]}>调试</Text>
+            </Pressable>
+          </View>
+
+          <View pointerEvents="none" style={styles.controlsProgress}>
+            <Text style={[styles.controlsProgressText, { color: themeTokens.hint }]}>本章 {progress}%</Text>
+          </View>
           <ReaderControlsSheet
-            fontSize={fontSize}
-            theme={theme}
-            onFontSizeChange={setFontSize}
-            onThemeChange={setTheme}
-            progress={chapter.progress}
-            onOpenSceneDebug={onOpenSceneDebug}
+            activePanel={activePanel}
+            chapters={chapters}
+            currentChapterId={chapter.id}
+            preferences={preferences}
+            onActivePanelChange={setActivePanel}
+            onChapterChange={(chapterId) => {
+              setControlsVisible(false);
+              setActivePanel(null);
+              onChapterChange(chapterId, 'saved');
+            }}
+            onPreferencesChange={setPreferences}
           />
-        </Pressable>
+        </>
       )}
 
       <Modal
@@ -212,12 +388,10 @@ export function ReaderScreen({
           <Pressable style={styles.previewBackdrop} onPress={() => setPreviewImageUrl(null)} />
           <View style={styles.previewHeader}>
             <Pressable accessibilityRole="button" onPress={() => setPreviewImageUrl(null)} style={styles.previewClose}>
-              <Text style={styles.previewCloseText}>x</Text>
+              <Text style={styles.previewCloseText}>×</Text>
             </Pressable>
           </View>
-          {previewImageUrl ? (
-            <Image source={{ uri: previewImageUrl }} resizeMode="contain" style={styles.previewImage} />
-          ) : null}
+          {previewImageUrl ? <Image source={{ uri: previewImageUrl }} resizeMode="contain" style={styles.previewImage} /> : null}
         </View>
       </Modal>
     </View>
@@ -225,68 +399,32 @@ export function ReaderScreen({
 }
 
 const styles = StyleSheet.create({
-  readerShell: { flex: 1 },
-  readerScroll: { flex: 1 },
-  readerContent: { paddingHorizontal: 24, paddingBottom: 78 },
-  toast: {
-    minHeight: 46,
-    borderRadius: 18,
+  readerShell: { flex: 1, overflow: 'hidden' },
+  pageGestureArea: { flex: 1 },
+  pageList: { flex: 1 },
+  page: { height: '100%', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 44, overflow: 'hidden' },
+  chapterTitle: { fontSize: 22, lineHeight: 30, fontWeight: '800', marginBottom: 18 },
+  pageIndicator: { position: 'absolute', bottom: 16, alignSelf: 'center', fontSize: 11, fontWeight: '700' },
+  readerHeader: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 54,
     paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    backgroundColor: 'rgba(32,54,48,0.92)',
-    marginBottom: 16,
+    borderBottomWidth: 1,
   },
-  toastDot: { color: '#fff', fontSize: 18 },
-  toastText: { flex: 1, color: '#fff', fontSize: 13, lineHeight: 18 },
-  chapterTitle: {
-    fontSize: 22,
-    lineHeight: 30,
-    fontWeight: '800',
-    marginBottom: 18,
-  },
-  readerHint: { fontSize: 12, textAlign: 'center', marginTop: 8 },
-  readingProgress: {
-    position: 'absolute',
-    left: 28,
-    right: 28,
-    bottom: 22,
-    height: 3,
-    borderRadius: 9,
-    overflow: 'hidden',
-  },
-  readingProgressFill: { width: '46%', height: '100%', borderRadius: 9 },
-  controlsBackdrop: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.08)',
-  },
-  previewOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.92)',
-    justifyContent: 'center',
-  },
-  previewBackdrop: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-  },
-  previewHeader: {
-    position: 'absolute',
-    top: 18,
-    left: 0,
-    right: 0,
-    zIndex: 2,
-    paddingHorizontal: 18,
-    alignItems: 'flex-end',
-  },
+  headerButton: { width: 50, height: 44, alignItems: 'center', justifyContent: 'center' },
+  backText: { fontSize: 34, lineHeight: 36, fontWeight: '400' },
+  debugText: { fontSize: 12, fontWeight: '800' },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 14, fontWeight: '800' },
+  controlsProgress: { position: 'absolute', left: 0, right: 0, bottom: 78, alignItems: 'center' },
+  controlsProgressText: { fontSize: 11, fontWeight: '700' },
+  previewOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center' },
+  previewBackdrop: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
+  previewHeader: { position: 'absolute', top: 18, left: 0, right: 0, zIndex: 2, paddingHorizontal: 18, alignItems: 'flex-end' },
   previewClose: {
     width: 42,
     height: 42,
@@ -297,14 +435,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.2)',
   },
-  previewCloseText: {
-    color: '#fff',
-    fontSize: 30,
-    lineHeight: 34,
-    fontWeight: '500',
-  },
-  previewImage: {
-    width: '100%',
-    height: '82%',
-  },
+  previewCloseText: { color: '#fff', fontSize: 30, lineHeight: 34, fontWeight: '500' },
+  previewImage: { width: '100%', height: '82%' },
 });

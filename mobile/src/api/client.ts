@@ -1,4 +1,4 @@
-﻿import type { Book, Chapter, GenerationTask, SceneCandidate, SceneImage } from '../types/app';
+import type { Book, Chapter, GenerationTask, SceneCandidate, SceneImage } from '../types/app';
 
 const normalizeBaseUrl = (url: string) => url.replace(/\/+$/, '');
 
@@ -63,6 +63,10 @@ export async function fetchBooks() {
 
 export async function fetchChapter(chapterId: string) {
   return getJson<Chapter>(`/chapters/${chapterId}`);
+}
+
+export async function fetchChapters(bookId: string) {
+  return getJson<Chapter[]>(`/books/${encodeURIComponent(bookId)}/chapters`);
 }
 
 export async function fetchGenerationTasks() {

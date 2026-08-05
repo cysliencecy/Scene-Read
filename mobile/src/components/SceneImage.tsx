@@ -11,7 +11,14 @@ export function SceneImage({
 }) {
   if (imageUrl) {
     return (
-      <Pressable accessibilityRole="imagebutton" onPress={() => onPreview?.(imageUrl)} style={styles.sceneImage}>
+      <Pressable
+        accessibilityRole="imagebutton"
+        onPress={(event) => {
+          event.stopPropagation();
+          onPreview?.(imageUrl);
+        }}
+        style={styles.sceneImage}
+      >
         <Image source={{ uri: imageUrl }} resizeMode="cover" style={styles.sceneImageContent} />
       </Pressable>
     );
