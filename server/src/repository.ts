@@ -9,6 +9,10 @@ import type { Book, Chapter, ChapterBlock, GenerationTask, SceneImage, SceneCand
 
 type BookInput = Partial<Book> & Pick<Book, 'title' | 'currentChapterId'>;
 type ChapterInput = Partial<Chapter> & Pick<Chapter, 'bookId' | 'title'>;
+type BookImportInput = {
+  book: BookInput;
+  chapters: ChapterInput[];
+};
 type GenerationTaskInput = Partial<GenerationTask> & Pick<GenerationTask, 'chapterId'>;
 type SceneImageInput = Partial<SceneImage> &
   Pick<SceneImage, 'chapterId' | 'prompt'> & {
@@ -220,7 +224,7 @@ export async function createBook(input: BookInput): Promise<Book> {
       accent: input.accent ?? '#2f4a40',
       current_chapter_id: input.currentChapterId,
       last_read_label: input.lastReadLabel ?? '准备开始第一章',
-      visual_style: null,
+      visual_style: input.visualStyle ?? null,
     })
     .select('*')
     .single();
@@ -266,6 +270,27 @@ export async function createChapter(input: ChapterInput): Promise<Chapter> {
 
   if (error) throw error;
   return toChapter(data);
+}
+
+export async function importBook(input: BookImportInput): Promise<{ book: Book }> {
+  const client = requireSupabase();
+  const book = await createBook(input.book);
+
+  if (input.chapters.length === 0) {
+    return { book };
+  }
+
+  const chapterRows = input.chapters.map((chapter) => ({
+    id: chapter.id ?? createId('chapter'),
+    book_id: chapter.bookId,
+    title: chapter.title,
+    progress: chapter.progress ?? 0,
+    blocks: chapter.blocks ?? [],
+  }));
+  const { error } = await client.from('chapters').upsert(chapterRows);
+
+  if (error) throw error;
+  return { book };
 }
 
 export async function listGenerationTasks(): Promise<GenerationTask[]> {

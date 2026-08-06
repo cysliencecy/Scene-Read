@@ -16,6 +16,7 @@ import {
   getChapter,
   getGenerationTask,
   getSceneImage,
+  importBook,
   listBooks,
   listChaptersByBook,
   listGenerationTasks,
@@ -232,6 +233,21 @@ app.get('/books', async (_request, response, next) => {
 app.post('/books', async (request, response, next) => {
   try {
     response.status(201).json({ data: await createBook(request.body) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/books/import', async (request, response, next) => {
+  try {
+    const book = request.body?.book;
+    const chapters = request.body?.chapters;
+    if (!book || !Array.isArray(chapters)) {
+      response.status(400).json({ error: 'INVALID_BOOK_IMPORT' });
+      return;
+    }
+
+    response.status(201).json({ data: await importBook({ book, chapters }) });
   } catch (error) {
     next(error);
   }

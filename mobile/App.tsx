@@ -2,8 +2,6 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import {
-  createBook,
-  createChapter,
   deleteBook,
   fetchBooks,
   fetchChapter,
@@ -11,6 +9,7 @@ import {
   fetchGenerationTasks,
   fetchSceneImages,
   fetchSceneCandidates,
+  importBook,
   retryGenerationTask,
   submitChapterGenerationTask,
 } from './src/api/client';
@@ -44,6 +43,7 @@ export default function App() {
   const [pendingImportDraft, setPendingImportDraft] = useState<ImportedBookDraft | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [syncingBookIds, setSyncingBookIds] = useState<string[]>([]);
   const [readerChapterEntry, setReaderChapterEntry] = useState<ReaderChapterEntry>('saved');
   const [isEditingShelf, setIsEditingShelf] = useState(false);
   const [selectedImportedBookIds, setSelectedImportedBookIds] = useState<string[]>([]);
@@ -126,7 +126,11 @@ export default function App() {
   }, [chaptersById, navigation.selectedChapterId]);
 
   useEffect(() => {
-    if (route.name !== 'Reader' || !navigation.selectedBookId) return;
+    if (
+      route.name !== 'Reader' ||
+      !navigation.selectedBookId ||
+      syncingBookIds.includes(navigation.selectedBookId)
+    ) return;
     let cancelled = false;
 
     async function loadBookChapters() {
@@ -153,10 +157,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [navigation.selectedBookId, route.name]);
+  }, [navigation.selectedBookId, route.name, syncingBookIds]);
 
   useEffect(() => {
-    if ((route.name !== 'Reader' && route.name !== 'SceneDebug') || !currentChapter) return;
+    if (
+      (route.name !== 'Reader' && route.name !== 'SceneDebug') ||
+      !currentChapter ||
+      syncingBookIds.includes(currentChapter.bookId)
+    ) return;
 
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -186,10 +194,10 @@ export default function App() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [currentChapter, route.name]);
+  }, [currentChapter, route.name, syncingBookIds]);
 
   useEffect(() => {
-    if (route.name !== 'Reader' || !currentChapter) return;
+    if (route.name !== 'Reader' || !currentChapter || syncingBookIds.includes(currentChapter.bookId)) return;
     const hasChapterTask = generationTasks.some((task) => task.chapterId === currentChapter.id);
     const hasChapterImage = sceneImages.some((image) => image.chapterId === currentChapter.id);
     if (hasChapterTask || hasChapterImage) return;
@@ -211,7 +219,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentChapter, generationTasks, route.name, sceneImages]);
+  }, [currentChapter, generationTasks, route.name, sceneImages, syncingBookIds]);
 
   const navigate = (nextRoute: AppRoute) => {
     setNavigation((current) => ({ ...current, route: nextRoute }));
@@ -365,62 +373,73 @@ export default function App() {
     }
   };
 
-  const completeMockImport = async () => {
+  const completeImport = () => {
     const draft = pendingImportDraft;
-
-    if (draft) {
-      const importedBook = { ...draft.book, visualStyle: navigation.visualStyle };
-      let persistedBook: Book = importedBook;
-      let persistedChapters: Chapter[] = draft.chapters;
-      let generationTask: GenerationTask | null = null;
-
-      try {
-        persistedBook = await createBook(importedBook);
-        persistedChapters = await Promise.all(draft.chapters.map((chapter) => createChapter(chapter)));
-        generationTask = await submitChapterGenerationTask(persistedBook.currentChapterId);
-        setApiStatus('connected');
-      } catch {
-        generationTask = {
-          id: `task-${importedBook.currentChapterId}-scene-image`,
-          bookId: importedBook.id,
-          chapterId: importedBook.currentChapterId,
-          progress: 0,
-          status: 'failed',
-          taskType: 'scene_image',
-          label: '场景图生成任务提交失败',
-          errorMessage: '后端暂时不可用，正文已保留，可以稍后重试生成。',
-        };
-        setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
-      }
-
-      const displayBook = { ...persistedBook, visualStyle: navigation.visualStyle };
-      setShelfBooks((current) => {
-        const withoutExisting = current.filter((book) => book.id !== displayBook.id);
-        return [displayBook, ...withoutExisting];
-      });
-      setChaptersById((current) => {
-        const next = { ...current };
-        persistedChapters.forEach((chapter) => {
-          next[chapter.id] = chapter;
-        });
-        return next;
-      });
-      if (generationTask) {
-        setGenerationTasks((current) => [...current.filter((task) => task.id !== generationTask.id), generationTask]);
-      }
-      setNavigation((current) => ({
-        ...current,
-        selectedBookId: displayBook.id,
-        selectedChapterId: displayBook.currentChapterId,
-        route: { name: 'Reader' },
-      }));
-      setReaderChapterEntry('start');
-      saveLastReaderChapter(displayBook.id, displayBook.currentChapterId).catch(() => undefined);
-      setPendingImportDraft(null);
+    if (!draft) {
+      navigate({ name: 'Reader' });
       return;
     }
 
-    navigate({ name: 'Reader' });
+    const importedBook = { ...draft.book, visualStyle: navigation.visualStyle };
+    const pendingTask: GenerationTask = {
+      id: `task-${importedBook.currentChapterId}-scene-image`,
+      bookId: importedBook.id,
+      chapterId: importedBook.currentChapterId,
+      progress: 0,
+      status: 'queued',
+      taskType: 'scene_image',
+      label: '正在后台保存书籍…',
+    };
+
+    setShelfBooks((current) => [importedBook, ...current.filter((book) => book.id !== importedBook.id)]);
+    setChaptersById((current) => {
+      const next = { ...current };
+      draft.chapters.forEach((chapter) => {
+        next[chapter.id] = chapter;
+      });
+      return next;
+    });
+    setGenerationTasks((current) => [...current.filter((task) => task.id !== pendingTask.id), pendingTask]);
+    setSyncingBookIds((current) => [...current.filter((id) => id !== importedBook.id), importedBook.id]);
+    setNavigation((current) => ({
+      ...current,
+      selectedBookId: importedBook.id,
+      selectedChapterId: importedBook.currentChapterId,
+      route: { name: 'Reader' },
+    }));
+    setReaderChapterEntry('start');
+    saveLastReaderChapter(importedBook.id, importedBook.currentChapterId).catch(() => undefined);
+    setPendingImportDraft(null);
+
+    void (async () => {
+      let bookSaved = false;
+      try {
+        const persisted = await importBook(importedBook, draft.chapters);
+        bookSaved = true;
+        setShelfBooks((current) => [
+          { ...persisted.book, visualStyle: navigation.visualStyle },
+          ...current.filter((book) => book.id !== persisted.book.id),
+        ]);
+        const generationTask = await submitChapterGenerationTask(persisted.book.currentChapterId);
+        setGenerationTasks((current) => [
+          ...current.filter((task) => task.id !== generationTask.id),
+          generationTask,
+        ]);
+        setApiStatus('connected');
+      } catch (error) {
+        const failedTask: GenerationTask = {
+          ...pendingTask,
+          status: 'failed',
+          label: bookSaved ? '场景图生成任务提交失败' : '书籍后台保存失败',
+          errorMessage:
+            error instanceof Error ? error.message : '后端暂时不可用，正文已保留，可以稍后重试生成。',
+        };
+        setGenerationTasks((current) => [...current.filter((task) => task.id !== failedTask.id), failedTask]);
+        setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
+      } finally {
+        setSyncingBookIds((current) => current.filter((id) => id !== importedBook.id));
+      }
+    })();
   };
 
   const goBack = () => {
@@ -479,7 +498,7 @@ export default function App() {
           <StyleScreen
             selected={navigation.visualStyle}
             onSelect={setVisualStyle}
-            onStart={completeMockImport}
+            onStart={completeImport}
           />
         )}
         {route.name === 'Reader' &&

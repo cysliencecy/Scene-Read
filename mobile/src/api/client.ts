@@ -93,6 +93,10 @@ export async function createChapter(chapter: Chapter) {
   return postJson<Chapter>('/chapters', chapter);
 }
 
+export async function importBook(book: Book, chapters: Chapter[]) {
+  return postJson<{ book: Book }>('/books/import', { book, chapters });
+}
+
 export async function submitChapterGenerationTask(chapterId: string) {
   return postJson<GenerationTask>(`/chapters/${encodeURIComponent(chapterId)}/generation-task`, {});
 }
