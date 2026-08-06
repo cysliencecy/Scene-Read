@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .image_generator import generate_images_for_candidates, target_image_count_for_paragraphs
+from .image_generator import generate_images_for_candidates, select_candidates_for_generation, target_image_count_for_paragraphs
 from .processor import process_chapter, result_to_dict
 from .types import ChapterPayload
 
@@ -124,6 +124,10 @@ def main() -> int:
 
         if args.generate_images:
             target_images = target_image_count_for_paragraphs(len(payload["blocks"]), max_images=args.max_images)
+            selected_candidates = select_candidates_for_generation(processed.candidates, target_images)
+            result["selectedCandidateIds"] = [candidate.id for candidate in selected_candidates]
+            if args.api_url:
+                _post_to_api(args.api_url, result)
             if args.task_id:
                 _patch_task(
                     args.api_url,
@@ -131,10 +135,10 @@ def main() -> int:
                     {"status": "generating", "progress": 60, "label": f"正在生成 {target_images} 张阅读辅助图"},
                 )
             generated_images = generate_images_for_candidates(
-                processed.candidates,
+                selected_candidates,
                 provider=args.image_provider,
                 max_images=args.max_images,
-                target_images=target_images,
+                target_images=len(selected_candidates),
             )
             result["generatedImages"] = [asdict(image) for image in generated_images]
 

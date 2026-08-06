@@ -66,6 +66,7 @@ const readerThemeTokens: Record<
 };
 
 type RestoreTarget = ReaderAnchor | 'loading' | 'start' | 'end' | null;
+const SIDE_TAP_ZONE_RATIO = 0.3;
 
 export function ReaderScreen({
   chapter,
@@ -89,6 +90,8 @@ export function ReaderScreen({
   onRetryGenerationTask: (taskId: string) => void;
 }) {
   const listRef = useRef<FlatList<ReaderPage>>(null);
+  const readerShellRef = useRef<View>(null);
+  const readerShellLeft = useRef(0);
   const touchStart = useRef({ x: 0, y: 0, time: 0 });
   const currentAnchor = useRef<ReaderAnchor>({ blockId: `${chapter.id}:title`, offset: 0 });
   const restoreTarget = useRef<RestoreTarget>('loading');
@@ -224,6 +227,15 @@ export function ReaderScreen({
     [currentPage, goToAdjacentChapter, pages.length, recordPage, scrollToPage],
   );
 
+  const turnPageFromTap = useCallback(
+    (direction: -1 | 1) => {
+      setControlsVisible(false);
+      setActivePanel(null);
+      goToRelativePage(direction);
+    },
+    [goToRelativePage],
+  );
+
   const handleTouchStart = (event: GestureResponderEvent) => {
     touchStart.current = {
       x: event.nativeEvent.pageX,
@@ -244,11 +256,11 @@ export function ReaderScreen({
     }
 
     if (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8 || duration > 350 || layout.width === 0) return;
-    const localX = event.nativeEvent.locationX;
-    if (localX < layout.width * 0.25) {
-      goToRelativePage(-1);
-    } else if (localX > layout.width * 0.75) {
-      goToRelativePage(1);
+    const localX = event.nativeEvent.pageX - readerShellLeft.current;
+    if (localX < layout.width * SIDE_TAP_ZONE_RATIO) {
+      turnPageFromTap(-1);
+    } else if (localX > layout.width * (1 - SIDE_TAP_ZONE_RATIO)) {
+      turnPageFromTap(1);
     } else {
       setControlsVisible((visible) => {
         if (visible) setActivePanel(null);
@@ -265,6 +277,9 @@ export function ReaderScreen({
   const handleLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
     setLayout((current) => (current.width === width && current.height === height ? current : { width, height }));
+    readerShellRef.current?.measureInWindow((x) => {
+      readerShellLeft.current = x;
+    });
   };
 
   const renderPage = ({ item: page }: { item: ReaderPage }) => (
@@ -320,7 +335,11 @@ export function ReaderScreen({
   );
 
   return (
-    <View onLayout={handleLayout} style={[styles.readerShell, { backgroundColor: themeTokens.background }]}>
+    <View
+      onLayout={handleLayout}
+      ref={readerShellRef}
+      style={[styles.readerShell, { backgroundColor: themeTokens.background }]}
+    >
       <View style={styles.pageGestureArea} onTouchEnd={handleTouchEnd} onTouchStart={handleTouchStart}>
         {layout.width > 0 && (
           <FlatList

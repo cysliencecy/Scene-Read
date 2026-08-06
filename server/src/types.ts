@@ -77,6 +77,7 @@ export type SceneCandidate = {
   imageType?: ImageType;
   locationChange?: string;
   confidence: number;
+  selectedForGeneration?: boolean;
   provider?: string;
   model?: string;
   promptVersion?: string;

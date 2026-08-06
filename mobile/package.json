@@ -25,6 +25,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "test:scene-placement": "tsx scripts/test-scene-placement.ts",
     "test:reader-pagination": "tsx scripts/test-reader-pagination.ts",
     "test:txt-import": "tsx scripts/test-txt-import.ts"
   },

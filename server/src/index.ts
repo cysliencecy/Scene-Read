@@ -82,6 +82,9 @@ function listInMemorySceneCandidates(filters: { chapterId?: string; taskId?: str
 
     const candidates = Array.isArray(body.candidates) ? (body.candidates as WorkerCandidatePayload[]) : [];
     const generatedImages = Array.isArray(body.generatedImages) ? (body.generatedImages as WorkerSceneImagePayload[]) : [];
+    const selectedCandidateIds = new Set(
+      Array.isArray(body.selectedCandidateIds) ? body.selectedCandidateIds.filter((id): id is string => typeof id === 'string') : [],
+    );
     const modelInfo = extractWorkerModelInfo(body);
 
     return candidates.map((candidate, index) => ({
@@ -99,6 +102,7 @@ function listInMemorySceneCandidates(filters: { chapterId?: string; taskId?: str
       imageType: candidate.imageType ?? 'scene',
       locationChange: candidate.locationChange,
       confidence: candidate.confidence ?? 0,
+      selectedForGeneration: Boolean(candidate.id && selectedCandidateIds.has(candidate.id)),
       provider: modelInfo.provider,
       model: modelInfo.model,
       promptVersion: modelInfo.promptVersion,
@@ -488,6 +492,9 @@ app.post('/worker/scene-candidates', async (request, response, next) => {
     const body = request.body as Record<string, unknown>;
     const candidates = Array.isArray(body.candidates) ? (body.candidates as WorkerCandidatePayload[]) : [];
     const generatedImages = Array.isArray(body.generatedImages) ? (body.generatedImages as WorkerSceneImagePayload[]) : [];
+    const selectedCandidateIds = new Set(
+      Array.isArray(body.selectedCandidateIds) ? body.selectedCandidateIds.filter((id): id is string => typeof id === 'string') : [],
+    );
     const taskId = typeof body.taskId === 'string' ? body.taskId : undefined;
     const chapterId = typeof body.chapterId === 'string' ? body.chapterId : undefined;
 
@@ -510,6 +517,7 @@ app.post('/worker/scene-candidates', async (request, response, next) => {
           imageType: candidate.imageType ?? 'scene',
           locationChange: candidate.locationChange,
           confidence: candidate.confidence ?? 0,
+          selectedForGeneration: Boolean(candidate.id && selectedCandidateIds.has(candidate.id)),
           provider: modelInfo.provider,
           model: modelInfo.model,
           promptVersion: modelInfo.promptVersion,

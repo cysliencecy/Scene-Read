@@ -112,6 +112,12 @@ const isMissingSceneCandidateTableError = (error: { code?: string; message?: str
   return error.code === '42P01' || error.code === 'PGRST204' || error.code === 'PGRST205' || message.includes('scene_candidates');
 };
 
+const isCandidateSelectedInRawResponse = (candidateId: string, rawResponse: unknown) => {
+  if (!rawResponse || typeof rawResponse !== 'object') return false;
+  const selectedIds = (rawResponse as { selectedCandidateIds?: unknown }).selectedCandidateIds;
+  return Array.isArray(selectedIds) && selectedIds.includes(candidateId);
+};
+
 const toSceneCandidate = (row: {
   id: string;
   task_id: string;
@@ -131,6 +137,7 @@ const toSceneCandidate = (row: {
   model?: string | null;
   prompt_version?: string | null;
   raw_response?: unknown;
+  selected_for_generation?: boolean | null;
 }): SceneCandidate => ({
   id: row.id,
   taskId: row.task_id,
@@ -150,6 +157,8 @@ const toSceneCandidate = (row: {
   model: row.model ?? undefined,
   promptVersion: row.prompt_version ?? undefined,
   rawResponse: row.raw_response,
+  selectedForGeneration:
+    row.selected_for_generation ?? isCandidateSelectedInRawResponse(row.id, row.raw_response),
 });
 
 
@@ -465,6 +474,7 @@ export async function createSceneCandidates(inputs: SceneCandidateInput[]): Prom
       model: input.model,
       promptVersion: input.promptVersion,
       rawResponse: input.rawResponse,
+      selectedForGeneration: input.selectedForGeneration ?? false,
     }));
   }
 
@@ -487,14 +497,17 @@ export async function createSceneCandidates(inputs: SceneCandidateInput[]): Prom
     model: input.model ?? null,
     prompt_version: input.promptVersion ?? 'scene-v1',
     raw_response: input.rawResponse ?? null,
+    selected_for_generation: input.selectedForGeneration ?? false,
   }));
 
   const { data, error } = await supabase.from('scene_candidates').upsert(payload).select('*');
   if (error) {
-    if (isMissingSceneCandidateTableError(error)) return [];
-    const legacyPayload = payload.map(({ image_type: _imageType, ...item }) => item);
+    const legacyPayload = payload.map(({ image_type: _imageType, selected_for_generation: _selected, ...item }) => item);
     const legacyResult = await supabase.from('scene_candidates').upsert(legacyPayload).select('*');
-    if (legacyResult.error) throw error;
+    if (legacyResult.error) {
+      if (isMissingSceneCandidateTableError(legacyResult.error)) return [];
+      throw error;
+    }
     return legacyResult.data.map(toSceneCandidate);
   }
   return data.map(toSceneCandidate);

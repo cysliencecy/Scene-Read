@@ -127,6 +127,7 @@ alter table public.scene_candidates add column if not exists provider text;
 alter table public.scene_candidates add column if not exists model text;
 alter table public.scene_candidates add column if not exists prompt_version text;
 alter table public.scene_candidates add column if not exists raw_response jsonb;
+alter table public.scene_candidates add column if not exists selected_for_generation boolean not null default false;
 
 create table if not exists public.reading_progress (
   id text primary key default gen_random_uuid()::text,

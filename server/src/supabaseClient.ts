@@ -160,6 +160,7 @@ export type Database = {
           model: string | null;
           prompt_version: string | null;
           raw_response: unknown;
+          selected_for_generation: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -182,6 +183,7 @@ export type Database = {
           model?: string | null;
           prompt_version?: string | null;
           raw_response?: unknown;
+          selected_for_generation?: boolean;
         };
         Update: {
           id?: string;
@@ -202,6 +204,7 @@ export type Database = {
           model?: string | null;
           prompt_version?: string | null;
           raw_response?: unknown;
+          selected_for_generation?: boolean;
         };
         Relationships: [];
       };
