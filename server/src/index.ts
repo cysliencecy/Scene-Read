@@ -2,6 +2,7 @@ import cors from 'cors';
 import express from 'express';
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -11,22 +12,38 @@ import {
   createSceneCandidates,
   dataMode,
   deleteBook,
+  findImageGenerationAttemptByKey,
+  findImageGenerationAttemptByTask,
   getBook,
   getChapter,
   getGenerationTask,
+  getSceneCandidate,
   getSceneImage,
   listBooks,
+  listBookVisualProfiles,
   listChaptersByBook,
   listGenerationTasks,
+  listImageGenerationAttempts,
   listSceneImages,
   listSceneCandidates,
   updateGenerationTask,
+  upsertImageGenerationAttempt,
+  upsertSceneCandidate,
 } from './repository.js';
+import {
+  API_ERROR_CODES,
+  ApiInputError,
+  parseAttemptCallback,
+  parseManualRegeneration,
+  parseWorkerCandidateCallback,
+} from './imagePipeline.js';
+import type { SceneCandidate, VisualProfileFact } from './types.js';
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
 const workerSceneCandidateResults: unknown[] = [];
 const runningTaskIds = new Set<string>();
+const manualReclassificationInstructions = new Map<string, { kind: 'reclassify'; candidateId: string; idempotencyKey: string }>();
 const activeTaskStatuses = new Set(['queued', 'recognizing', 'generating']);
 
 type WorkerCandidatePayload = {
@@ -104,6 +121,44 @@ function listInMemorySceneCandidates(filters: { chapterId?: string; taskId?: str
       rawResponse: body,
     }));
   });
+}
+
+function candidateProfileFacts(candidate: SceneCandidate): VisualProfileFact[] {
+  if (!candidate.rawResponse || typeof candidate.rawResponse !== 'object') return [];
+  const facts = (candidate.rawResponse as { profileFactSuggestions?: unknown }).profileFactSuggestions;
+  return Array.isArray(facts) ? facts as VisualProfileFact[] : [];
+}
+
+async function toDebugDetail(candidate: SceneCandidate, includeAttempts = true) {
+  return {
+    ...candidate,
+    classification: candidate.classification,
+    contractVersion: candidate.contractVersion,
+    profileVersion: candidate.profileVersion,
+    profileFactSuggestions: candidateProfileFacts(candidate),
+    attempts: includeAttempts ? await listImageGenerationAttempts(candidate.id) : [],
+  };
+}
+
+function manualTaskId(candidateId: string, idempotencyKey: string) {
+  const digest = createHash('sha256').update(`${candidateId}:${idempotencyKey}`).digest('hex').slice(0, 20);
+  return `task-manual-${digest}`;
+}
+
+function reclassificationTaskId(candidateId: string, idempotencyKey: string) {
+  const candidateToken = Buffer.from(candidateId, 'utf8').toString('base64url');
+  const digest = createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 20);
+  return `task-reclassify.${candidateToken}.${digest}`;
+}
+
+function persistedReclassificationInstruction(taskId: string) {
+  const match = /^task-reclassify\.([A-Za-z0-9_-]+)\.[a-f0-9]{20}$/.exec(taskId);
+  if (!match?.[1]) return undefined;
+  return {
+    kind: 'reclassify' as const,
+    candidateId: Buffer.from(match[1], 'base64url').toString('utf8'),
+    idempotencyKey: taskId,
+  };
 }
 
 async function listImageBackfilledSceneCandidates(filters: { chapterId?: string; taskId?: string }) {
@@ -348,13 +403,13 @@ app.get('/scene-candidates', async (request, response, next) => {
     const imageBackfilledCandidates = persistedCandidates.length > 0 || memoryCandidates.length > 0
       ? []
       : await listImageBackfilledSceneCandidates({ chapterId, taskId });
-    response.json({
-      data: persistedCandidates.length > 0
+    const candidates = persistedCandidates.length > 0
         ? persistedCandidates
         : memoryCandidates.length > 0
           ? memoryCandidates
-          : imageBackfilledCandidates,
-    });
+          : imageBackfilledCandidates;
+    const includeAttempts = request.query.includeAttempts === 'true';
+    response.json({ data: await Promise.all(candidates.map((candidate) => toDebugDetail(candidate, includeAttempts))) });
   } catch (error) {
     next(error);
   }
@@ -436,13 +491,36 @@ app.get('/worker/tasks/:taskId/chapter-payload', async (request, response, next)
       return;
     }
 
+    const bookId = task.bookId ?? chapter.bookId;
+    const profiles = await listBookVisualProfiles(bookId);
+    const manualAttempt = await findImageGenerationAttemptByTask(task.id);
+    const manualCandidate = manualAttempt ? await getSceneCandidate(manualAttempt.candidateId) : null;
+    const reclassification = manualReclassificationInstructions.get(task.id) ?? persistedReclassificationInstruction(task.id);
+
     response.json({
       data: {
         taskId: task.id,
-        bookId: task.bookId ?? chapter.bookId,
+        bookId,
         chapterId: chapter.id,
         chapterTitle: chapter.title,
         blocks: chapter.blocks.filter((block) => block.type === 'paragraph'),
+        profiles,
+        ...(manualAttempt && manualCandidate ? {
+          manualGeneration: {
+            kind: 'generate',
+            idempotencyKey: manualAttempt.idempotencyKey,
+            candidateId: manualCandidate.id,
+            attemptId: manualAttempt.id,
+            parentAttemptId: manualAttempt.parentAttemptId,
+            requestedType: manualAttempt.requestedType,
+            evidence: manualCandidate.classification?.evidence ?? [{
+              sourceBlockId: manualCandidate.sourceBlockId,
+              sourceText: manualCandidate.sourceText,
+            }],
+            auxiliaryTags: manualCandidate.classification?.auxiliaryTags ?? [],
+            contractVersion: manualCandidate.contractVersion ?? 'composition-v1',
+          },
+        } : reclassification ? { manualGeneration: reclassification } : {}),
       },
     });
   } catch (error) {
@@ -475,8 +553,33 @@ app.get('/scene-images/:imageId', async (request, response, next) => {
 
 app.post('/worker/scene-candidates', async (request, response, next) => {
   try {
-    workerSceneCandidateResults.push(request.body);
     const body = request.body as Record<string, unknown>;
+    const rawCandidates = Array.isArray(body.candidates) ? body.candidates : [];
+    const isCanonicalCallback = rawCandidates.every((candidate) => (
+      candidate && typeof candidate === 'object' && 'classification' in candidate
+    ));
+    if (isCanonicalCallback) {
+      const callback = parseWorkerCandidateCallback(body);
+      const candidates = await Promise.all(callback.candidates.map((candidate, index) => upsertSceneCandidate({
+        id: candidate.id,
+        taskId: callback.taskId,
+        bookId: callback.bookId,
+        chapterId: callback.chapterId,
+        order: index,
+        sourceBlockId: candidate.sourceBlockId,
+        position: candidate.position,
+        sourceText: candidate.classification.evidence[0]?.sourceText ?? '',
+        promptDraft: candidate.classification.reason,
+        classification: candidate.classification,
+        contractVersion: candidate.contractVersion,
+        profileVersion: candidate.profileVersion,
+        profileFactSuggestions: callback.profileFactSuggestions,
+      })));
+      response.json({ data: await Promise.all(candidates.map((candidate) => toDebugDetail(candidate))) });
+      return;
+    }
+
+    workerSceneCandidateResults.push(request.body);
     const candidates = Array.isArray(body.candidates) ? (body.candidates as WorkerCandidatePayload[]) : [];
     const generatedImages = Array.isArray(body.generatedImages) ? (body.generatedImages as WorkerSceneImagePayload[]) : [];
     const taskId = typeof body.taskId === 'string' ? body.taskId : undefined;
@@ -518,11 +621,129 @@ app.post('/worker/scene-candidates', async (request, response, next) => {
   }
 });
 
+app.post('/worker/image-generation-attempts', async (request, response, next) => {
+  try {
+    const callback = parseAttemptCallback(request.body);
+    const candidate = await getSceneCandidate(callback.candidateId);
+    if (!candidate) throw new ApiInputError(API_ERROR_CODES.candidateNotFound, 404);
+    const existing = await findImageGenerationAttemptByKey(callback.idempotencyKey);
+    if (existing && (
+      existing.candidateId !== callback.candidateId
+      || existing.taskId !== callback.taskId
+      || existing.trigger !== callback.trigger
+      || existing.requestedType !== callback.requestedType
+    )) {
+      throw new ApiInputError(API_ERROR_CODES.idempotencyConflict, 409);
+    }
+    const imageUrl = callback.imageBase64
+      ? `data:${callback.mimeType ?? 'application/octet-stream'};base64,${callback.imageBase64}`
+      : undefined;
+    const attempt = await upsertImageGenerationAttempt({
+      idempotencyKey: callback.idempotencyKey,
+      candidateId: callback.candidateId,
+      taskId: callback.taskId,
+      trigger: callback.trigger,
+      requestedType: callback.requestedType,
+      parentAttemptId: callback.parentAttemptId,
+      status: callback.status,
+      prompt: callback.prompt,
+      provider: callback.provider,
+      model: callback.model,
+      width: callback.width,
+      height: callback.height,
+      imageUrl,
+      audit: callback.audit,
+      classificationSnapshot: candidate.classification,
+      contractVersion: candidate.contractVersion,
+      profileVersion: candidate.profileVersion,
+      artifactMetadata: callback.imageBase64 ? { mimeType: callback.mimeType, retainedForDebug: callback.status !== 'publishable' } : undefined,
+    });
+    response.json({ data: attempt });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/scene-candidates/:candidateId/regenerations', async (request, response, next) => {
+  try {
+    const candidate = await getSceneCandidate(request.params.candidateId);
+    if (!candidate) throw new ApiInputError(API_ERROR_CODES.candidateNotFound, 404);
+    const body = request.body as Record<string, unknown>;
+
+    if (candidate.imageType === 'character' && body.overrideImageType === undefined) {
+      if (typeof body.idempotencyKey !== 'string' || body.idempotencyKey.trim() === '') {
+        throw new ApiInputError(API_ERROR_CODES.idempotencyKeyRequired);
+      }
+      const taskId = reclassificationTaskId(candidate.id, body.idempotencyKey);
+      const task = await createGenerationTask({
+        id: taskId,
+        bookId: candidate.bookId,
+        chapterId: candidate.chapterId,
+        status: 'queued',
+        progress: 0,
+        taskType: 'scene_image',
+        label: 'Legacy character candidate queued for canonical reclassification',
+      });
+      const instruction = { kind: 'reclassify' as const, candidateId: candidate.id, idempotencyKey: body.idempotencyKey };
+      manualReclassificationInstructions.set(task.id, instruction);
+      response.status(202).json({ data: { task, instruction } });
+      runWorkerForTask(task.id);
+      return;
+    }
+
+    const command = parseManualRegeneration(body);
+    const existing = await findImageGenerationAttemptByKey(command.idempotencyKey);
+    if (existing) {
+      if (existing.candidateId !== candidate.id || existing.requestedType !== command.overrideImageType || existing.trigger !== 'manual') {
+        throw new ApiInputError(API_ERROR_CODES.idempotencyConflict, 409);
+      }
+      const task = await getGenerationTask(existing.taskId);
+      if (!task) throw new ApiInputError(API_ERROR_CODES.idempotencyConflict, 409);
+      response.json({ data: { task, attempt: existing } });
+      return;
+    }
+
+    const priorAttempts = await listImageGenerationAttempts(candidate.id);
+    const parentAttempt = priorAttempts.at(-1);
+    const task = await createGenerationTask({
+      id: manualTaskId(candidate.id, command.idempotencyKey),
+      bookId: candidate.bookId,
+      chapterId: candidate.chapterId,
+      status: 'queued',
+      progress: 0,
+      taskType: 'scene_image',
+      label: 'Manual image regeneration queued',
+    });
+    const attempt = await upsertImageGenerationAttempt({
+      idempotencyKey: command.idempotencyKey,
+      candidateId: candidate.id,
+      taskId: task.id,
+      parentAttemptId: parentAttempt?.id,
+      trigger: 'manual',
+      requestedType: command.overrideImageType,
+      overriddenFrom: candidate.imageType,
+      status: 'queued',
+      prompt: candidate.finalPrompt ?? candidate.promptDraft,
+      classificationSnapshot: candidate.classification,
+      contractVersion: candidate.contractVersion,
+      profileVersion: candidate.profileVersion,
+    });
+    response.status(201).json({ data: { task, attempt } });
+    runWorkerForTask(task.id);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/worker/scene-candidates', (_request, response) => {
   response.json({ data: workerSceneCandidateResults });
 });
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
+  if (error instanceof ApiInputError) {
+    response.status(error.status).json({ error: error.code });
+    return;
+  }
   if (error instanceof Error && error.message === 'SUPABASE_NOT_CONFIGURED') {
     response.status(503).json({
       error: 'SUPABASE_NOT_CONFIGURED',

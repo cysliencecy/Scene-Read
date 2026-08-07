@@ -127,6 +127,103 @@ def formal_worker_result() -> WorkerResult:
 
 
 class CliFormalGenerationTest(unittest.TestCase):
+    def test_fetched_chapter_profiles_are_passed_to_classification(self) -> None:
+        payload = {
+            **PAYLOAD,
+            "profiles": [{
+                "id": "profile-1",
+                "bookId": "book-1",
+                "entityType": "character",
+                "entityKey": "Lin",
+                "stableFacts": [{
+                    "field": "coat", "value": "dark wool", "sourceBlockId": "p1",
+                    "sourceText": "Lin wore a dark wool coat.", "stability": "stable",
+                }],
+                "flexibleFacts": [],
+                "version": "profile-v1",
+            }],
+        }
+        processed = formal_worker_result()
+        with patch("scene_reader_worker.cli._fetch_task_payload", return_value=payload), patch(
+            "scene_reader_worker.cli._patch_task"
+        ), patch("scene_reader_worker.cli.process_chapter", return_value=processed) as process_chapter_mock, patch(
+            "scene_reader_worker.cli._post_to_api"
+        ), patch.object(
+            sys,
+            "argv",
+            ["scene-reader-worker", "--task-id", "task-1", "--api-url", "http://api.example"],
+        ), patch("builtins.print"):
+            self.assertEqual(main(), 0)
+
+        profiles = process_chapter_mock.call_args.kwargs["profiles"]
+        self.assertEqual(len(profiles), 1)
+        self.assertEqual(profiles[0].entityKey, "Lin")
+        self.assertEqual(profiles[0].stableFacts[0].value, "dark wool")
+
+    def test_manual_task_reuses_single_attempt_pipeline_without_classification_retry(self) -> None:
+        audit = ImageAuditResult(
+            "publishable",
+            (ImageAuditRuleResult("type", True, "info", "ok"),),
+            False,
+            "vision",
+            "vision-v2",
+            "audit-v3",
+        )
+        result = GenerationAttempt(
+            "publishable",
+            GeneratedImageArtifact("manual-image", "image/png", "glm", "glm-image-test", 768, 512),
+            audit,
+        )
+        payload = {
+            **PAYLOAD,
+            "profiles": [],
+            "manualGeneration": {
+                "kind": "generate",
+                "idempotencyKey": "manual-key-1",
+                "candidateId": "candidate-1",
+                "attemptId": "attempt-manual-1",
+                "parentAttemptId": "attempt-auto-1",
+                "requestedType": "interaction",
+                "evidence": [{"sourceBlockId": "p1", "sourceText": "Rain crossed the bridge."}],
+                "auxiliaryTags": ["rain"],
+                "contractVersion": "composition-v1",
+            },
+        }
+        requests = []
+        callbacks = []
+
+        with patch("scene_reader_worker.cli._fetch_task_payload", return_value=payload), patch(
+            "scene_reader_worker.cli._patch_task"
+        ), patch("scene_reader_worker.cli.process_chapter") as process_chapter_mock, patch(
+            "scene_reader_worker.cli.run_generation_attempt",
+            side_effect=lambda request, **kwargs: requests.append(request) or result,
+        ), patch("scene_reader_worker.cli._post_to_api") as candidate_callback, patch(
+            "scene_reader_worker.cli._post_attempt_to_api",
+            side_effect=lambda api_url, callback: callbacks.append(callback),
+        ), patch.object(
+            sys,
+            "argv",
+            [
+                "scene-reader-worker",
+                "--task-id",
+                "task-manual-1",
+                "--api-url",
+                "http://api.example",
+                "--image-provider",
+                "glm",
+            ],
+        ), patch("builtins.print"):
+            self.assertEqual(main(), 0)
+
+        process_chapter_mock.assert_not_called()
+        candidate_callback.assert_not_called()
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].idempotencyKey, "manual-key-1")
+        self.assertEqual(requests[0].trigger, "manual")
+        self.assertEqual(requests[0].requestedType, "interaction")
+        self.assertEqual(callbacks[0]["idempotencyKey"], "manual-key-1")
+        self.assertEqual(callbacks[0]["parentAttemptId"], "attempt-auto-1")
+
     def test_generate_images_flag_keeps_heuristic_candidates_debug_visible_without_generating(self) -> None:
         heuristic_result = WorkerResult(
             taskId="task-1",

@@ -18,7 +18,13 @@ from .processor import (
     process_chapter,
     result_to_dict,
 )
-from .types import ChapterPayload, ImageGenerationRequest
+from .types import (
+    BookVisualProfile,
+    ChapterPayload,
+    ImageGenerationRequest,
+    VisualEvidence,
+    VisualProfileFact,
+)
 
 
 def _read_json(path: Path) -> ChapterPayload:
@@ -73,6 +79,64 @@ def _post_attempt_to_api(api_url: str, payload: object) -> None:
     _request_json(f"{api_url.rstrip('/')}/worker/image-generation-attempts", method="POST", payload=payload)
 
 
+def _profile_fact(payload: dict[str, Any]) -> VisualProfileFact:
+    return VisualProfileFact(
+        field=payload["field"],
+        value=payload["value"],
+        sourceBlockId=payload["sourceBlockId"],
+        sourceText=payload["sourceText"],
+        stability=payload["stability"],
+    )
+
+
+def _profile(payload: dict[str, Any]) -> BookVisualProfile:
+    return BookVisualProfile(
+        id=payload["id"],
+        bookId=payload["bookId"],
+        entityType=payload["entityType"],
+        entityKey=payload["entityKey"],
+        stableFacts=tuple(_profile_fact(fact) for fact in payload.get("stableFacts", [])),
+        flexibleFacts=tuple(_profile_fact(fact) for fact in payload.get("flexibleFacts", [])),
+        version=payload["version"],
+    )
+
+
+def _execute_manual_generation(payload: ChapterPayload, *, image_provider: str) -> dict[str, Any]:
+    manual = payload["manualGeneration"]
+    contract = get_composition_contract(manual["requestedType"])
+    if contract.version != manual["contractVersion"]:
+        raise RuntimeError("Manual task contract version does not match the prompt registry.")
+    prompt = build_generation_prompt(
+        image_type=manual["requestedType"],
+        evidence=tuple(VisualEvidence(**item) for item in manual["evidence"]),
+        profiles=tuple(_profile(item) for item in payload.get("profiles", [])),
+        style="鍐欏疄",
+        auxiliary_tags=manual.get("auxiliaryTags", []),
+    )
+    request = ImageGenerationRequest(
+        idempotencyKey=manual["idempotencyKey"],
+        candidateId=manual["candidateId"],
+        taskId=payload["taskId"],
+        trigger="manual",
+        requestedType=manual["requestedType"],
+        prompt=prompt,
+        style="鍐欏疄",
+        aspectRatio="3:2",
+        contractVersion=manual["contractVersion"],
+    )
+    attempt = run_generation_attempt(
+        request,
+        provider=image_provider,
+        generate=lambda formal_request: generate_formal_image(formal_request, image_provider),
+        audit=audit_image,
+    )
+    return generation_attempt_callback_payload(
+        request,
+        attempt,
+        parent_attempt_id=manual.get("parentAttemptId"),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Process one SceneReader chapter payload.")
     parser.add_argument("--input", help="Path to chapter input JSON.")
@@ -105,7 +169,39 @@ def main() -> int:
                 {"status": "recognizing", "progress": 20, "label": "正在识别章节视觉锚点"},
             )
 
-        processed = process_chapter(payload, provider=args.provider)
+        manual = payload.get("manualGeneration")
+        if manual and manual.get("kind") == "generate":
+            image_provider = args.image_provider or "glm"
+            if args.task_id:
+                _patch_task(
+                    args.api_url,
+                    args.task_id,
+                    {"status": "generating", "progress": 60, "label": "Manual image generation in progress"},
+                )
+            callback = _execute_manual_generation(payload, image_provider=image_provider)
+            result = {"taskId": payload["taskId"], "status": "completed", "attempts": [callback]}
+            if args.output:
+                _write_json(Path(args.output), result)
+            if args.api_url:
+                _post_attempt_to_api(args.api_url, callback)
+                if args.task_id:
+                    _patch_task(
+                        args.api_url,
+                        args.task_id,
+                        {
+                            "status": "completed",
+                            "progress": 100,
+                            "label": "Manual image generation completed",
+                            "provider": image_provider,
+                            "durationMs": int((time.perf_counter() - started_at) * 1000),
+                        },
+                    )
+            if not args.output:
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+
+        profiles = tuple(_profile(item) for item in payload.get("profiles", []))
+        processed = process_chapter(payload, provider=args.provider, profiles=profiles)
         result = result_to_dict(processed)
 
         if args.generate_images and processed.provider != "heuristic":

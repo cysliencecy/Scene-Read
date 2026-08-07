@@ -45,6 +45,7 @@ export type PersistedCandidateInput = {
   classification: CandidateClassification;
   contractVersion: string;
   profileVersion?: string;
+  profileFactSuggestions?: VisualProfileFact[];
 };
 
 export type ProfileUpsertInput = Omit<BookVisualProfile, 'id'>;
@@ -235,6 +236,7 @@ export function createInMemoryImageRepository(options: { legacyImages?: SceneIma
         classificationStatus: input.classification.status,
         contractVersion: input.contractVersion,
         profileVersion: input.profileVersion,
+        rawResponse: { profileFactSuggestions: copyFacts(input.profileFactSuggestions ?? []) },
       };
       candidates.set(input.id, current ?? candidate);
       return candidates.get(input.id)!;
@@ -264,14 +266,19 @@ export function createInMemoryImageRepository(options: { legacyImages?: SceneIma
     async upsertAttempt(input: AttemptUpsertInput): Promise<ImageGenerationAttempt> {
       validateCanonicalImageTypeForWrite(input.requestedType);
       const existing = attemptsByKey.get(input.idempotencyKey);
-      if (existing) return existing;
+      if (existing && existing.status !== 'queued') return existing;
+      if (existing && input.status === 'queued') return existing;
       const attempt: ImageGenerationAttempt = {
         ...input,
-        id: input.id ?? createId('attempt'),
-        createdAt: new Date().toISOString(),
+        id: existing?.id ?? input.id ?? createId('attempt'),
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
       };
       attemptsByKey.set(input.idempotencyKey, attempt);
-      attemptsByCandidate.set(input.candidateId, [...(attemptsByCandidate.get(input.candidateId) ?? []), attempt]);
+      const candidateAttempts = attemptsByCandidate.get(input.candidateId) ?? [];
+      attemptsByCandidate.set(
+        input.candidateId,
+        existing ? candidateAttempts.map((item) => item.id === existing.id ? attempt : item) : [...candidateAttempts, attempt],
+      );
       if (isPublishableAttempt(attempt)) {
         projections.set(input.candidateId, {
           id: `projection-${input.candidateId}`,
@@ -293,6 +300,29 @@ export function createInMemoryImageRepository(options: { legacyImages?: SceneIma
       return [...(attemptsByCandidate.get(candidateId) ?? [])];
     },
 
+    async findAttemptByKey(idempotencyKey: string): Promise<ImageGenerationAttempt | null> {
+      return attemptsByKey.get(idempotencyKey) ?? null;
+    },
+
+    async findAttemptByTask(taskId: string): Promise<ImageGenerationAttempt | null> {
+      return [...attemptsByKey.values()].find((attempt) => attempt.taskId === taskId) ?? null;
+    },
+
+    async getCandidate(candidateId: string): Promise<SceneCandidate | null> {
+      return candidates.get(candidateId) ?? null;
+    },
+
+    async listCandidates(filters: { chapterId?: string; taskId?: string } = {}): Promise<SceneCandidate[]> {
+      return [...candidates.values()]
+        .filter((candidate) => !filters.chapterId || candidate.chapterId === filters.chapterId)
+        .filter((candidate) => !filters.taskId || candidate.taskId === filters.taskId)
+        .sort((left, right) => left.order - right.order);
+    },
+
+    async listProfiles(bookId: string): Promise<BookVisualProfile[]> {
+      return [...profiles.values()].filter((profile) => profile.bookId === bookId);
+    },
+
     async getProjection(candidateId: string): Promise<SceneImage | null> {
       return projections.get(candidateId) ?? null;
     },
@@ -305,6 +335,10 @@ export function createInMemoryImageRepository(options: { legacyImages?: SceneIma
     },
   };
 }
+
+const apiMemoryRepository = createInMemoryImageRepository();
+const apiMemoryTasks = new Map(mockGenerationTasks.map((task) => [task.id, { ...task }]));
+const apiLegacyCandidates = new Map<string, SceneCandidate>();
 
 
 const requireSupabase = () => {
@@ -415,7 +449,7 @@ export async function createChapter(input: ChapterInput): Promise<Chapter> {
 
 export async function listGenerationTasks(): Promise<GenerationTask[]> {
   if (!supabase) {
-    return mockGenerationTasks;
+    return [...apiMemoryTasks.values()];
   }
 
   const { data, error } = await supabase.from('generation_tasks').select('*').order('updated_at', { ascending: false });
@@ -425,7 +459,7 @@ export async function listGenerationTasks(): Promise<GenerationTask[]> {
 
 export async function getGenerationTask(taskId: string): Promise<GenerationTask | null> {
   if (!supabase) {
-    return mockGenerationTasks.find((task) => task.id === taskId) ?? null;
+    return apiMemoryTasks.get(taskId) ?? null;
   }
 
   const { data, error } = await supabase.from('generation_tasks').select('*').eq('id', taskId).maybeSingle();
@@ -437,6 +471,13 @@ export async function updateGenerationTask(
   taskId: string,
   input: Partial<Pick<GenerationTask, 'durationMs' | 'errorMessage' | 'label' | 'progress' | 'provider' | 'status'>>,
 ): Promise<GenerationTask> {
+  if (!supabase) {
+    const existing = apiMemoryTasks.get(taskId);
+    if (!existing) throw new Error('TASK_NOT_FOUND');
+    const updated = { ...existing, ...input };
+    apiMemoryTasks.set(taskId, updated);
+    return updated;
+  }
   const client = requireSupabase();
   const payload = {
     progress: input.progress,
@@ -469,9 +510,27 @@ export async function updateGenerationTask(
 }
 
 export async function createGenerationTask(input: GenerationTaskInput): Promise<GenerationTask> {
-  const client = requireSupabase();
   const chapter = await getChapter(input.chapterId);
   const id = input.id ?? `task-${input.chapterId}-scene-image`;
+  if (!supabase) {
+    const existing = apiMemoryTasks.get(id);
+    if (existing) return existing;
+    const task: GenerationTask = {
+      id,
+      bookId: input.bookId ?? chapter?.bookId,
+      chapterId: input.chapterId,
+      progress: input.progress ?? 0,
+      status: input.status ?? 'queued',
+      taskType: input.taskType ?? 'scene_image',
+      label: input.label ?? 'Scene image generation queued',
+      errorMessage: input.errorMessage,
+      provider: input.provider,
+      durationMs: input.durationMs,
+    };
+    apiMemoryTasks.set(id, task);
+    return task;
+  }
+  const client = requireSupabase();
   const payload = {
     id,
     book_id: input.bookId ?? chapter?.bookId ?? null,
@@ -509,7 +568,7 @@ export async function createGenerationTask(input: GenerationTaskInput): Promise<
 
 export async function listSceneImages(): Promise<SceneImage[]> {
   if (!supabase) {
-    return mockSceneImages;
+    return [...mockSceneImages, ...await apiMemoryRepository.listReaderImages()];
   }
 
   const { data, error } = await supabase.from('scene_images').select('*').order('created_at');
@@ -519,7 +578,7 @@ export async function listSceneImages(): Promise<SceneImage[]> {
 
 export async function getSceneImage(imageId: string): Promise<SceneImage | null> {
   if (!supabase) {
-    return mockSceneImages.find((image) => image.id === imageId) ?? null;
+    return (await listSceneImages()).find((image) => image.id === imageId) ?? null;
   }
 
   const { data, error } = await supabase.from('scene_images').select('*').eq('id', imageId).maybeSingle();
@@ -533,7 +592,13 @@ export async function createSceneImage(input: SceneImageInput): Promise<SceneIma
 }
 
 export async function listSceneCandidates(filters: { chapterId?: string; taskId?: string } = {}): Promise<SceneCandidate[]> {
-  if (!supabase) return [];
+  if (!supabase) {
+    const canonical = await apiMemoryRepository.listCandidates(filters);
+    const legacy = [...apiLegacyCandidates.values()]
+      .filter((candidate) => !filters.chapterId || candidate.chapterId === filters.chapterId)
+      .filter((candidate) => !filters.taskId || candidate.taskId === filters.taskId);
+    return [...canonical, ...legacy].sort((left, right) => left.order - right.order);
+  }
 
   let query = supabase.from('scene_candidates').select('*').order('candidate_order', { ascending: true });
   if (filters.chapterId) query = query.eq('chapter_id', filters.chapterId);
@@ -550,7 +615,8 @@ export async function listSceneCandidates(filters: { chapterId?: string; taskId?
 export async function createSceneCandidates(inputs: SceneCandidateInput[]): Promise<SceneCandidate[]> {
   if (inputs.length === 0) return [];
   if (!supabase) {
-    return inputs.map((input, index) => ({
+    return inputs.map((input, index) => {
+      const candidate: SceneCandidate = {
       id: input.id ?? createId('scene-candidate'),
       taskId: input.taskId,
       bookId: input.bookId,
@@ -562,14 +628,18 @@ export async function createSceneCandidates(inputs: SceneCandidateInput[]): Prom
       sourceText: input.sourceText,
       promptDraft: input.promptDraft,
       finalPrompt: input.finalPrompt,
-      imageType: input.imageType ? validateCanonicalImageTypeForWrite(input.imageType) : 'environment',
+      imageType: input.imageType ?? 'scene',
+      effectiveImageType: effectiveImageType(input.imageType ?? 'scene'),
       locationChange: input.locationChange,
       confidence: input.confidence ?? 0,
       provider: input.provider,
       model: input.model,
       promptVersion: input.promptVersion,
       rawResponse: input.rawResponse,
-    }));
+      };
+      apiLegacyCandidates.set(candidate.id, candidate);
+      return candidate;
+    });
   }
 
   const payload = inputs.map((input, index) => ({
@@ -669,6 +739,7 @@ const toAttempt = (row: {
 });
 
 export async function upsertSceneCandidate(input: PersistedCandidateInput): Promise<SceneCandidate> {
+  if (!supabase) return apiMemoryRepository.upsertCandidate(input);
   const client = requireSupabase();
   const primaryType = validateCanonicalImageTypeForWrite(input.classification.primaryType);
   const payload = {
@@ -690,6 +761,7 @@ export async function upsertSceneCandidate(input: PersistedCandidateInput): Prom
     classification_status: input.classification.status,
     contract_version: input.contractVersion,
     profile_version: input.profileVersion ?? null,
+    raw_response: { profileFactSuggestions: input.profileFactSuggestions ?? [] },
   };
   const { data, error } = await client.from('scene_candidates').upsert(payload).select('*').single();
   if (error) throw error;
@@ -697,6 +769,7 @@ export async function upsertSceneCandidate(input: PersistedCandidateInput): Prom
 }
 
 export async function upsertBookVisualProfile(input: ProfileUpsertInput): Promise<BookVisualProfile> {
+  if (!supabase) return apiMemoryRepository.upsertProfile(input);
   const client = requireSupabase();
   const existingResult = await client
     .from('book_visual_profiles')
@@ -726,10 +799,19 @@ export async function upsertBookVisualProfile(input: ProfileUpsertInput): Promis
 }
 
 export async function upsertImageGenerationAttempt(input: AttemptUpsertInput): Promise<ImageGenerationAttempt> {
+  if (!supabase) return apiMemoryRepository.upsertAttempt(input);
   const client = requireSupabase();
   const requestedType = validateCanonicalImageTypeForWrite(input.requestedType);
+  const existingResult = await client
+    .from('image_generation_attempts')
+    .select('*')
+    .eq('idempotency_key', input.idempotencyKey)
+    .maybeSingle();
+  if (existingResult.error) throw existingResult.error;
+  const existing = existingResult.data ? toAttempt(existingResult.data) : null;
+  if (existing && (existing.status !== 'queued' || input.status === 'queued')) return existing;
   const payload = {
-    id: input.id ?? createId('attempt'),
+    id: existing?.id ?? input.id ?? createId('attempt'),
     idempotency_key: input.idempotencyKey,
     candidate_id: input.candidateId,
     task_id: input.taskId,
@@ -750,13 +832,11 @@ export async function upsertImageGenerationAttempt(input: AttemptUpsertInput): P
     profile_version: input.profileVersion ?? null,
     artifact_metadata: input.artifactMetadata ?? null,
   };
-  const inserted = await client
-    .from('image_generation_attempts')
-    .upsert(payload, { onConflict: 'idempotency_key', ignoreDuplicates: true })
-    .select('*')
-    .maybeSingle();
+  const inserted = existing
+    ? await client.from('image_generation_attempts').update(payload as never).eq('id', existing.id).select('*').single()
+    : await client.from('image_generation_attempts').insert(payload).select('*').single();
   if (inserted.error) throw inserted.error;
-  const row = inserted.data ?? (await client.from('image_generation_attempts').select('*').eq('idempotency_key', input.idempotencyKey).single()).data;
+  const row = inserted.data;
   if (!row) throw new Error('ATTEMPT_UPSERT_DID_NOT_RETURN_A_RECORD');
   const attempt = toAttempt(row);
   if (!isPublishableAttempt(attempt)) return attempt;
@@ -779,8 +859,36 @@ export async function upsertImageGenerationAttempt(input: AttemptUpsertInput): P
 }
 
 export async function listImageGenerationAttempts(candidateId: string): Promise<ImageGenerationAttempt[]> {
-  if (!supabase) return [];
+  if (!supabase) return apiMemoryRepository.listAttempts(candidateId);
   const { data, error } = await supabase.from('image_generation_attempts').select('*').eq('candidate_id', candidateId).order('created_at');
   if (error) throw error;
   return data.map(toAttempt);
+}
+
+export async function getSceneCandidate(candidateId: string): Promise<SceneCandidate | null> {
+  if (!supabase) return await apiMemoryRepository.getCandidate(candidateId) ?? apiLegacyCandidates.get(candidateId) ?? null;
+  const { data, error } = await supabase.from('scene_candidates').select('*').eq('id', candidateId).maybeSingle();
+  if (error) throw error;
+  return data ? toSceneCandidate(data) : null;
+}
+
+export async function listBookVisualProfiles(bookId: string): Promise<BookVisualProfile[]> {
+  if (!supabase) return apiMemoryRepository.listProfiles(bookId);
+  const { data, error } = await supabase.from('book_visual_profiles').select('*').eq('book_id', bookId).order('entity_type').order('entity_key');
+  if (error) throw error;
+  return data.map(toProfile);
+}
+
+export async function findImageGenerationAttemptByKey(idempotencyKey: string): Promise<ImageGenerationAttempt | null> {
+  if (!supabase) return apiMemoryRepository.findAttemptByKey(idempotencyKey);
+  const { data, error } = await supabase.from('image_generation_attempts').select('*').eq('idempotency_key', idempotencyKey).maybeSingle();
+  if (error) throw error;
+  return data ? toAttempt(data) : null;
+}
+
+export async function findImageGenerationAttemptByTask(taskId: string): Promise<ImageGenerationAttempt | null> {
+  if (!supabase) return apiMemoryRepository.findAttemptByTask(taskId);
+  const { data, error } = await supabase.from('image_generation_attempts').select('*').eq('task_id', taskId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+  if (error) throw error;
+  return data ? toAttempt(data) : null;
 }
