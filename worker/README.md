@@ -147,6 +147,20 @@ Generate and post the image to the local API:
 python -m scene_reader_worker --input samples/chapter-input.json --provider heuristic --generate-images --image-provider mock-svg --api-url http://localhost:4000
 ```
 
+## Offline expanded-image quality gate
+
+The six-type activation gate is a local, offline evaluator. It validates exactly 60 unique, evidence-backed samples (ten each for `environment`, `portrait`, `interaction`, `action`, `object`, and `atmosphere`) and writes only a JSON plus Markdown report. It never calls Server/Supabase or Worker callbacks, and evaluation mode intentionally has no `--api-url` option.
+
+```powershell
+$env:PYTHONPATH = 'src'
+& 'C:\Users\18270\AppData\Local\Programs\Python\Python313\python.exe' scripts/run_expanded_image_quality_check.py `
+  --samples samples/expanded-image-quality-samples.json `
+  --results samples/expanded-image-quality-results.example.json `
+  --output .tmp/expanded-image-quality-report.json
+```
+
+The checked-in results file is an explicitly non-activation example fixture; it deliberately fails the severe fact-conflict gate. Use a fresh pipeline/audit snapshot and the review process in [`docs/expanded-image-quality-gate.md`](../docs/expanded-image-quality-gate.md) for an actual direct-activation decision.
+
 ## Output
 
 ```json
