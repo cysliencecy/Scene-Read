@@ -9,10 +9,24 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .types import SceneCandidate
+from .types import ImageGenerationRequest
 
 
 DEFAULT_GLM_IMAGE_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/images/generations"
 DEFAULT_GLM_IMAGE_MODEL = "glm-image"
+GLM_LANDSCAPE_SIZE = "1536x1024"
+
+
+def build_glm_payload(request: ImageGenerationRequest) -> dict[str, str]:
+    if request.aspectRatio != "3:2":
+        raise ValueError("Formal GLM requests require 3:2.")
+    return {"model": DEFAULT_GLM_IMAGE_MODEL, "prompt": request.prompt, "size": GLM_LANDSCAPE_SIZE}
+
+
+def build_pollinations_url(request: ImageGenerationRequest) -> str:
+    if request.aspectRatio != "3:2":
+        raise ValueError("Formal Pollinations requests require 3:2.")
+    return f"https://image.pollinations.ai/prompt/{urllib.parse.quote(request.prompt)}?width=1536&height=1024&nologo=true"
 
 
 @dataclass(frozen=True)
