@@ -9,9 +9,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .image_generator import generate_images_for_candidates, target_image_count_for_paragraphs
+from .image_generator import generate_images_for_candidates, target_image_count_for_paragraphs, generate_formal_image
+from .audit import audit_image
+from .pipeline import run_generation_attempt
 from .processor import process_chapter, result_to_dict
-from .types import ChapterPayload
+from .types import ChapterPayload, ImageGenerationRequest
 
 
 def _read_json(path: Path) -> ChapterPayload:
@@ -86,6 +88,9 @@ def _post_scene_image_to_api(api_url: str, payload: object) -> None:
     with urllib.request.urlopen(request, timeout=30) as response:
         response.read()
 
+def _post_attempt_to_api(api_url: str, payload: object) -> None:
+    _request_json(f"{api_url.rstrip('/')}/worker/image-generation-attempts", method="POST", payload=payload)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Process one SceneReader chapter payload.")
@@ -130,13 +135,13 @@ def main() -> int:
                     args.task_id,
                     {"status": "generating", "progress": 60, "label": f"正在生成 {target_images} 张阅读辅助图"},
                 )
-            generated_images = generate_images_for_candidates(
-                processed.candidates,
-                provider=args.image_provider,
-                max_images=args.max_images,
-                target_images=target_images,
-            )
-            result["generatedImages"] = [asdict(image) for image in generated_images]
+            attempts=[]
+            for candidate in processed.candidates[:target_images]:
+                request=ImageGenerationRequest(f"{payload['taskId']}:{candidate.id}",candidate.id,payload["taskId"],"automatic",candidate.imageType,candidate.promptDraft or candidate.reason,"写实","3:2","composition-v1")
+                attempt=run_generation_attempt(request,provider=args.image_provider or "glm",generate=lambda r: generate_formal_image(r,args.image_provider or "glm"),audit=audit_image)
+                record={"idempotencyKey":request.idempotencyKey,"candidateId":request.candidateId,"taskId":request.taskId,"requestedType":request.requestedType,"status":attempt.status,"prompt":request.prompt,"artifact":asdict(attempt.artifact) if attempt.artifact else None,"audit":asdict(attempt.audit) if attempt.audit else None,"error":attempt.error}
+                attempts.append(record)
+            result["attempts"]=attempts
         elif args.generate_images:
             result["generationSkipped"] = "heuristic classifications are debug-only and cannot generate formal images"
 
@@ -145,8 +150,8 @@ def main() -> int:
 
         if args.api_url:
             _post_to_api(args.api_url, result)
-            for image in result.get("generatedImages", []):
-                _post_scene_image_to_api(args.api_url, image)
+            for attempt in result.get("attempts", []):
+                _post_attempt_to_api(args.api_url, attempt)
             if args.task_id:
                 _patch_task(
                     args.api_url,

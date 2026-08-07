@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .types import SceneCandidate
-from .types import ImageGenerationRequest
+from .types import ImageGenerationRequest, GeneratedImageArtifact
 
 
 DEFAULT_GLM_IMAGE_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/images/generations"
@@ -27,6 +27,18 @@ def build_pollinations_url(request: ImageGenerationRequest) -> str:
     if request.aspectRatio != "3:2":
         raise ValueError("Formal Pollinations requests require 3:2.")
     return f"https://image.pollinations.ai/prompt/{urllib.parse.quote(request.prompt)}?width=1536&height=1024&nologo=true"
+
+def generate_formal_image(request: ImageGenerationRequest, provider: str) -> GeneratedImageArtifact:
+    if provider == "heuristic": raise ValueError("Heuristic cannot generate formal images.")
+    if provider == "mock-svg": data, mime = _svg_preview(request.prompt), "image/svg+xml"
+    elif provider == "pollinations":
+        with urllib.request.urlopen(build_pollinations_url(request), timeout=90) as response: data, mime = response.read(), response.headers.get("Content-Type","image/jpeg").split(";")[0]
+    elif provider == "glm":
+        payload=build_glm_payload(request); old=os.getenv("GLM_IMAGE_SIZE")
+        if old and old != GLM_LANDSCAPE_SIZE: raise ValueError("Square GLM override is not permitted for formal requests.")
+        data,mime=_download_glm_image(payload["prompt"])
+    else: raise ValueError(f"Unsupported formal provider: {provider}")
+    return GeneratedImageArtifact(base64.b64encode(data).decode(),mime,provider,DEFAULT_GLM_IMAGE_MODEL if provider=="glm" else provider,1536,1024)
 
 
 @dataclass(frozen=True)
