@@ -5,7 +5,21 @@ import {
   sceneImages as mockSceneImages,
 } from './mockData.js';
 import { isSupabaseConfigured, supabase } from './supabaseClient.js';
-import type { Book, Chapter, ChapterBlock, GenerationTask, SceneImage, SceneCandidate, VisualStyle } from './types.js';
+import { effectiveImageType, isPublishableAttempt, validateCanonicalImageTypeForWrite } from './imagePipeline.js';
+import type {
+  Book,
+  BookVisualProfile,
+  CandidateClassification,
+  Chapter,
+  ChapterBlock,
+  GenerationTask,
+  ImageGenerationAttempt,
+  SceneImage,
+  SceneCandidate,
+  StoredImageType,
+  VisualProfileFact,
+  VisualStyle,
+} from './types.js';
 
 type BookInput = Partial<Book> & Pick<Book, 'title' | 'currentChapterId'>;
 type ChapterInput = Partial<Chapter> & Pick<Chapter, 'bookId' | 'title'>;
@@ -17,6 +31,24 @@ type SceneImageInput = Partial<SceneImage> &
   };
 type SceneCandidateInput = Partial<SceneCandidate> &
   Pick<SceneCandidate, 'taskId' | 'chapterId' | 'sourceBlockId' | 'sourceText' | 'promptDraft'>;
+
+export type PersistedCandidateInput = {
+  id: string;
+  taskId: string;
+  bookId?: string;
+  chapterId: string;
+  order?: number;
+  sourceBlockId: string;
+  position?: number;
+  sourceText: string;
+  promptDraft: string;
+  classification: CandidateClassification;
+  contractVersion: string;
+  profileVersion?: string;
+};
+
+export type ProfileUpsertInput = Omit<BookVisualProfile, 'id'>;
+export type AttemptUpsertInput = Omit<ImageGenerationAttempt, 'id' | 'createdAt'> & { id?: string };
 
 const createId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -90,7 +122,9 @@ const toSceneImage = (row: {
   chapter_id: string;
   source_block_id?: string | null;
   position?: number | null;
-  image_type?: 'scene' | 'character' | 'object' | null;
+  image_type?: StoredImageType | null;
+  candidate_id?: string | null;
+  attempt_id?: string | null;
   variant: 'street' | 'office';
   prompt: string;
   image_path: string | null;
@@ -100,6 +134,9 @@ const toSceneImage = (row: {
   sourceBlockId: row.source_block_id ?? undefined,
   position: row.position ?? undefined,
   imageType: row.image_type ?? undefined,
+  effectiveImageType: effectiveImageType(row.image_type),
+  candidateId: row.candidate_id ?? undefined,
+  attemptId: row.attempt_id ?? undefined,
   variant: row.variant,
   prompt: row.prompt,
   imagePath: row.image_path ?? undefined,
@@ -124,13 +161,17 @@ const toSceneCandidate = (row: {
   source_text: string | null;
   prompt_draft: string | null;
   final_prompt?: string | null;
-  image_type?: 'scene' | 'character' | 'object' | null;
+  image_type?: StoredImageType | null;
   location_change?: string | null;
   confidence: number | string | null;
   provider?: string | null;
   model?: string | null;
   prompt_version?: string | null;
   raw_response?: unknown;
+  classification_snapshot?: unknown;
+  classification_status?: 'eligible' | 'below_threshold' | 'invalid' | null;
+  contract_version?: string | null;
+  profile_version?: string | null;
 }): SceneCandidate => ({
   id: row.id,
   taskId: row.task_id,
@@ -144,13 +185,126 @@ const toSceneCandidate = (row: {
   promptDraft: row.prompt_draft ?? '',
   finalPrompt: row.final_prompt ?? undefined,
   imageType: row.image_type ?? undefined,
+  effectiveImageType: effectiveImageType(row.image_type),
   locationChange: row.location_change ?? undefined,
   confidence: Number(row.confidence ?? 0),
   provider: row.provider ?? undefined,
   model: row.model ?? undefined,
   promptVersion: row.prompt_version ?? undefined,
   rawResponse: row.raw_response,
+  classification: row.classification_snapshot as CandidateClassification | undefined,
+  classificationStatus: row.classification_status ?? undefined,
+  contractVersion: row.contract_version ?? undefined,
+  profileVersion: row.profile_version ?? undefined,
 });
+
+const copyFacts = (facts: VisualProfileFact[]) => facts.map((fact) => ({ ...fact }));
+
+export function createInMemoryImageRepository(options: { legacyImages?: SceneImage[] } = {}) {
+  const candidates = new Map<string, SceneCandidate>();
+  const profiles = new Map<string, BookVisualProfile>();
+  const attemptsByKey = new Map<string, ImageGenerationAttempt>();
+  const attemptsByCandidate = new Map<string, ImageGenerationAttempt[]>();
+  const projections = new Map<string, SceneImage>();
+  const legacyImages = [...(options.legacyImages ?? [])];
+
+  const profileIdentity = (input: Pick<BookVisualProfile, 'bookId' | 'entityType' | 'entityKey'>) =>
+    `${input.bookId}:${input.entityType}:${input.entityKey}`;
+
+  return {
+    async upsertCandidate(input: PersistedCandidateInput): Promise<SceneCandidate> {
+      const primaryType = validateCanonicalImageTypeForWrite(input.classification.primaryType);
+      const current = candidates.get(input.id);
+      const candidate: SceneCandidate = {
+        id: input.id,
+        taskId: input.taskId,
+        bookId: input.bookId,
+        chapterId: input.chapterId,
+        order: input.order ?? 0,
+        sourceBlockId: input.sourceBlockId,
+        position: input.position ?? 0,
+        reason: input.classification.reason,
+        sourceText: input.sourceText,
+        promptDraft: input.promptDraft,
+        imageType: primaryType,
+        effectiveImageType: primaryType,
+        confidence: input.classification.rankedTypes[0].confidence,
+        model: input.classification.model,
+        promptVersion: input.classification.promptVersion,
+        classification: input.classification,
+        classificationStatus: input.classification.status,
+        contractVersion: input.contractVersion,
+        profileVersion: input.profileVersion,
+      };
+      candidates.set(input.id, current ?? candidate);
+      return candidates.get(input.id)!;
+    },
+
+    async upsertProfile(input: ProfileUpsertInput): Promise<BookVisualProfile> {
+      const identity = profileIdentity(input);
+      const current = profiles.get(identity);
+      if (!current) {
+        const created: BookVisualProfile = { ...input, id: createId('profile'), stableFacts: copyFacts(input.stableFacts), flexibleFacts: copyFacts(input.flexibleFacts) };
+        profiles.set(identity, created);
+        return created;
+      }
+      const stableFields = new Set(current.stableFacts.map((fact) => fact.field));
+      const flexibleByField = new Map(current.flexibleFacts.map((fact) => [fact.field, fact]));
+      for (const fact of input.flexibleFacts) flexibleByField.set(fact.field, { ...fact });
+      const merged: BookVisualProfile = {
+        ...current,
+        stableFacts: copyFacts(current.stableFacts).concat(input.stableFacts.filter((fact) => !stableFields.has(fact.field)).map((fact) => ({ ...fact }))),
+        flexibleFacts: [...flexibleByField.values()],
+        version: input.version,
+      };
+      profiles.set(identity, merged);
+      return merged;
+    },
+
+    async upsertAttempt(input: AttemptUpsertInput): Promise<ImageGenerationAttempt> {
+      validateCanonicalImageTypeForWrite(input.requestedType);
+      const existing = attemptsByKey.get(input.idempotencyKey);
+      if (existing) return existing;
+      const attempt: ImageGenerationAttempt = {
+        ...input,
+        id: input.id ?? createId('attempt'),
+        createdAt: new Date().toISOString(),
+      };
+      attemptsByKey.set(input.idempotencyKey, attempt);
+      attemptsByCandidate.set(input.candidateId, [...(attemptsByCandidate.get(input.candidateId) ?? []), attempt]);
+      if (isPublishableAttempt(attempt)) {
+        projections.set(input.candidateId, {
+          id: `projection-${input.candidateId}`,
+          chapterId: candidates.get(input.candidateId)?.chapterId ?? '',
+          sourceBlockId: candidates.get(input.candidateId)?.sourceBlockId,
+          imageType: input.requestedType,
+          effectiveImageType: input.requestedType,
+          candidateId: input.candidateId,
+          attemptId: attempt.id,
+          variant: 'street',
+          prompt: input.prompt,
+          imageUrl: input.imageUrl,
+        });
+      }
+      return attempt;
+    },
+
+    async listAttempts(candidateId: string): Promise<ImageGenerationAttempt[]> {
+      return [...(attemptsByCandidate.get(candidateId) ?? [])];
+    },
+
+    async getProjection(candidateId: string): Promise<SceneImage | null> {
+      return projections.get(candidateId) ?? null;
+    },
+
+    async listReaderImages(): Promise<SceneImage[]> {
+      return [...legacyImages, ...projections.values()].map((image) => ({
+        ...image,
+        effectiveImageType: effectiveImageType(image.imageType),
+      }));
+    },
+  };
+}
 
 
 const requireSupabase = () => {
@@ -399,7 +553,7 @@ export async function createSceneImage(input: SceneImageInput): Promise<SceneIma
     chapter_id: input.chapterId,
     source_block_id: input.sourceBlockId ?? null,
     position: input.position ?? null,
-    image_type: input.imageType ?? 'scene',
+    image_type: input.imageType ? validateCanonicalImageTypeForWrite(input.imageType) : 'environment',
     variant: input.variant ?? 'street',
     prompt: input.prompt,
     image_path: imagePath ?? null,
@@ -458,7 +612,7 @@ export async function createSceneCandidates(inputs: SceneCandidateInput[]): Prom
       sourceText: input.sourceText,
       promptDraft: input.promptDraft,
       finalPrompt: input.finalPrompt,
-      imageType: input.imageType ?? 'scene',
+      imageType: input.imageType ? validateCanonicalImageTypeForWrite(input.imageType) : 'environment',
       locationChange: input.locationChange,
       confidence: input.confidence ?? 0,
       provider: input.provider,
@@ -480,7 +634,7 @@ export async function createSceneCandidates(inputs: SceneCandidateInput[]): Prom
     source_text: input.sourceText,
     prompt_draft: input.promptDraft,
     final_prompt: input.finalPrompt ?? null,
-    image_type: input.imageType ?? 'scene',
+    image_type: input.imageType ? validateCanonicalImageTypeForWrite(input.imageType) : 'environment',
     location_change: input.locationChange ?? null,
     confidence: input.confidence ?? 0,
     provider: input.provider ?? null,
@@ -498,4 +652,185 @@ export async function createSceneCandidates(inputs: SceneCandidateInput[]): Prom
     return legacyResult.data.map(toSceneCandidate);
   }
   return data.map(toSceneCandidate);
+}
+
+const toProfile = (row: {
+  id: string;
+  book_id: string;
+  entity_type: 'character' | 'location';
+  entity_key: string;
+  stable_facts: unknown;
+  flexible_facts: unknown;
+  version: string;
+}): BookVisualProfile => ({
+  id: row.id,
+  bookId: row.book_id,
+  entityType: row.entity_type,
+  entityKey: row.entity_key,
+  stableFacts: Array.isArray(row.stable_facts) ? row.stable_facts as VisualProfileFact[] : [],
+  flexibleFacts: Array.isArray(row.flexible_facts) ? row.flexible_facts as VisualProfileFact[] : [],
+  version: row.version,
+});
+
+const toAttempt = (row: {
+  id: string;
+  idempotency_key: string;
+  candidate_id: string;
+  task_id: string;
+  parent_attempt_id: string | null;
+  trigger: 'automatic' | 'manual';
+  requested_type: ImageGenerationAttempt['requestedType'];
+  overridden_from: StoredImageType | null;
+  status: ImageGenerationAttempt['status'];
+  prompt: string;
+  provider: string | null;
+  model: string | null;
+  width: number | null;
+  height: number | null;
+  image_url: string | null;
+  audit: unknown;
+  classification_snapshot?: unknown;
+  contract_version?: string | null;
+  profile_version?: string | null;
+  artifact_metadata?: unknown;
+  created_at: string;
+}): ImageGenerationAttempt => ({
+  id: row.id,
+  idempotencyKey: row.idempotency_key,
+  candidateId: row.candidate_id,
+  taskId: row.task_id,
+  parentAttemptId: row.parent_attempt_id ?? undefined,
+  trigger: row.trigger,
+  requestedType: row.requested_type,
+  overriddenFrom: row.overridden_from ?? undefined,
+  status: row.status,
+  prompt: row.prompt,
+  provider: row.provider ?? undefined,
+  model: row.model ?? undefined,
+  width: row.width ?? undefined,
+  height: row.height ?? undefined,
+  imageUrl: row.image_url ?? undefined,
+  audit: row.audit as ImageGenerationAttempt['audit'],
+  classificationSnapshot: row.classification_snapshot as CandidateClassification | undefined,
+  contractVersion: row.contract_version ?? undefined,
+  profileVersion: row.profile_version ?? undefined,
+  artifactMetadata: row.artifact_metadata,
+  createdAt: row.created_at,
+});
+
+export async function upsertSceneCandidate(input: PersistedCandidateInput): Promise<SceneCandidate> {
+  const client = requireSupabase();
+  const primaryType = validateCanonicalImageTypeForWrite(input.classification.primaryType);
+  const payload = {
+    id: input.id,
+    task_id: input.taskId,
+    book_id: input.bookId ?? null,
+    chapter_id: input.chapterId,
+    candidate_order: input.order ?? 0,
+    source_block_id: input.sourceBlockId,
+    position: input.position ?? 0,
+    reason: input.classification.reason,
+    source_text: input.sourceText,
+    prompt_draft: input.promptDraft,
+    image_type: primaryType,
+    confidence: input.classification.rankedTypes[0].confidence,
+    model: input.classification.model,
+    prompt_version: input.classification.promptVersion,
+    classification_snapshot: input.classification,
+    classification_status: input.classification.status,
+    contract_version: input.contractVersion,
+    profile_version: input.profileVersion ?? null,
+  };
+  const { data, error } = await client.from('scene_candidates').upsert(payload).select('*').single();
+  if (error) throw error;
+  return toSceneCandidate(data);
+}
+
+export async function upsertBookVisualProfile(input: ProfileUpsertInput): Promise<BookVisualProfile> {
+  const client = requireSupabase();
+  const existingResult = await client
+    .from('book_visual_profiles')
+    .select('*')
+    .eq('book_id', input.bookId)
+    .eq('entity_type', input.entityType)
+    .eq('entity_key', input.entityKey)
+    .maybeSingle();
+  if (existingResult.error) throw existingResult.error;
+
+  const existing = existingResult.data ? toProfile(existingResult.data) : undefined;
+  const stableFields = new Set(existing?.stableFacts.map((fact) => fact.field) ?? []);
+  const flexibleByField = new Map(existing?.flexibleFacts.map((fact) => [fact.field, fact]) ?? []);
+  for (const fact of input.flexibleFacts) flexibleByField.set(fact.field, { ...fact });
+  const payload = {
+    id: existing?.id ?? createId('profile'),
+    book_id: input.bookId,
+    entity_type: input.entityType,
+    entity_key: input.entityKey,
+    stable_facts: [...(existing?.stableFacts ?? []), ...input.stableFacts.filter((fact) => !stableFields.has(fact.field))],
+    flexible_facts: [...flexibleByField.values()],
+    version: input.version,
+  };
+  const { data, error } = await client.from('book_visual_profiles').upsert(payload, { onConflict: 'book_id,entity_type,entity_key' }).select('*').single();
+  if (error) throw error;
+  return toProfile(data);
+}
+
+export async function upsertImageGenerationAttempt(input: AttemptUpsertInput): Promise<ImageGenerationAttempt> {
+  const client = requireSupabase();
+  const requestedType = validateCanonicalImageTypeForWrite(input.requestedType);
+  const payload = {
+    id: input.id ?? createId('attempt'),
+    idempotency_key: input.idempotencyKey,
+    candidate_id: input.candidateId,
+    task_id: input.taskId,
+    parent_attempt_id: input.parentAttemptId ?? null,
+    trigger: input.trigger,
+    requested_type: requestedType,
+    overridden_from: input.overriddenFrom ?? null,
+    status: input.status,
+    prompt: input.prompt,
+    provider: input.provider ?? null,
+    model: input.model ?? null,
+    width: input.width ?? null,
+    height: input.height ?? null,
+    image_url: input.imageUrl ?? null,
+    audit: input.audit ?? null,
+    classification_snapshot: input.classificationSnapshot ?? null,
+    contract_version: input.contractVersion ?? null,
+    profile_version: input.profileVersion ?? null,
+    artifact_metadata: input.artifactMetadata ?? null,
+  };
+  const inserted = await client
+    .from('image_generation_attempts')
+    .upsert(payload, { onConflict: 'idempotency_key', ignoreDuplicates: true })
+    .select('*')
+    .maybeSingle();
+  if (inserted.error) throw inserted.error;
+  const row = inserted.data ?? (await client.from('image_generation_attempts').select('*').eq('idempotency_key', input.idempotencyKey).single()).data;
+  if (!row) throw new Error('ATTEMPT_UPSERT_DID_NOT_RETURN_A_RECORD');
+  const attempt = toAttempt(row);
+  if (!isPublishableAttempt(attempt)) return attempt;
+
+  const candidateResult = await client.from('scene_candidates').select('chapter_id, source_block_id').eq('id', attempt.candidateId).single();
+  if (candidateResult.error) throw candidateResult.error;
+  const projectionResult = await client.from('scene_images').upsert({
+    id: `projection-${attempt.candidateId}`,
+    chapter_id: candidateResult.data.chapter_id,
+    source_block_id: candidateResult.data.source_block_id,
+    image_type: attempt.requestedType,
+    candidate_id: attempt.candidateId,
+    attempt_id: attempt.id,
+    variant: 'street',
+    prompt: attempt.prompt,
+    image_path: attempt.imageUrl ?? null,
+  }, { onConflict: 'candidate_id' });
+  if (projectionResult.error) throw projectionResult.error;
+  return attempt;
+}
+
+export async function listImageGenerationAttempts(candidateId: string): Promise<ImageGenerationAttempt[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase.from('image_generation_attempts').select('*').eq('candidate_id', candidateId).order('created_at');
+  if (error) throw error;
+  return data.map(toAttempt);
 }

@@ -10,7 +10,86 @@ export type Book = {
   visualStyle?: VisualStyle;
 };
 
-export type ImageType = 'scene' | 'character' | 'object';
+export type CanonicalImageType =
+  | 'environment'
+  | 'portrait'
+  | 'interaction'
+  | 'action'
+  | 'object'
+  | 'atmosphere';
+
+export type StoredImageType = CanonicalImageType | 'scene' | 'character';
+/** @deprecated Use StoredImageType for legacy reads or CanonicalImageType for new writes. */
+export type ImageType = StoredImageType;
+export type ClassificationStatus = 'eligible' | 'below_threshold' | 'invalid';
+export type AttemptStatus = 'queued' | 'generation_failed' | 'audit_failed' | 'blocked' | 'publishable';
+
+export type RankedImageType = {
+  imageType: CanonicalImageType;
+  confidence: number;
+};
+
+export type CandidateClassification = {
+  primaryType: CanonicalImageType;
+  rankedTypes: [RankedImageType, RankedImageType, RankedImageType];
+  evidence: Array<{ sourceBlockId: string; sourceText: string }>;
+  reason: string;
+  auxiliaryTags: string[];
+  status: ClassificationStatus;
+  model: string;
+  promptVersion: string;
+};
+
+export type ImageAuditResult = {
+  verdict: 'publishable' | 'blocked';
+  rules: Array<{ rule: string; passed: boolean; severity: 'info' | 'warning' | 'severe'; explanation: string }>;
+  severeFactConflict: boolean;
+  provider: string;
+  model: string;
+  auditVersion: string;
+};
+
+export type VisualProfileFact = {
+  field: string;
+  value: string;
+  sourceBlockId: string;
+  sourceText: string;
+  stability: 'stable' | 'inferred';
+};
+
+export type BookVisualProfile = {
+  id: string;
+  bookId: string;
+  entityType: 'character' | 'location';
+  entityKey: string;
+  stableFacts: VisualProfileFact[];
+  flexibleFacts: VisualProfileFact[];
+  version: string;
+};
+
+export type ImageGenerationAttempt = {
+  id: string;
+  idempotencyKey: string;
+  candidateId: string;
+  taskId: string;
+  parentAttemptId?: string;
+  trigger: 'automatic' | 'manual';
+  requestedType: CanonicalImageType;
+  overriddenFrom?: StoredImageType;
+  status: AttemptStatus;
+  prompt: string;
+  provider?: string;
+  model?: string;
+  width?: number;
+  height?: number;
+  imageUrl?: string;
+  audit?: ImageAuditResult;
+  classificationSnapshot?: CandidateClassification;
+  contractVersion?: string;
+  profileVersion?: string;
+  artifactMetadata?: unknown;
+  createdAt: string;
+};
 
 export type ChapterBlock =
   | {
@@ -55,7 +134,10 @@ export type SceneImage = {
   chapterId: string;
   sourceBlockId?: string;
   position?: number;
-  imageType?: ImageType;
+  imageType?: StoredImageType;
+  effectiveImageType?: CanonicalImageType | null;
+  candidateId?: string;
+  attemptId?: string;
   variant: 'street' | 'office';
   prompt: string;
   imagePath?: string;
@@ -74,7 +156,12 @@ export type SceneCandidate = {
   sourceText: string;
   promptDraft: string;
   finalPrompt?: string;
-  imageType?: ImageType;
+  imageType?: StoredImageType;
+  effectiveImageType?: CanonicalImageType | null;
+  classification?: CandidateClassification;
+  classificationStatus?: ClassificationStatus;
+  contractVersion?: string;
+  profileVersion?: string;
   locationChange?: string;
   confidence: number;
   provider?: string;

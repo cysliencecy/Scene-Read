@@ -104,12 +104,16 @@ export const sceneImages: SceneImage[] = [
   {
     id: 'rain-image-1',
     chapterId: 'rain-chapter-1',
+    imageType: 'scene',
+    effectiveImageType: 'environment',
     variant: 'street',
     prompt: '雨后清晨街道，便利店灯光，湿润路面，安静现实主义风格',
   },
   {
     id: 'street-image-1',
     chapterId: 'street-chapter-1',
+    imageType: 'object',
+    effectiveImageType: 'object',
     variant: 'office',
     prompt: '旧街书店室内，雨夜木门，旧书箱，温暖灯光',
   },
