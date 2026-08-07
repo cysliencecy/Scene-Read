@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { OnlineBookError } from '../src/onlineBookProvider.js';
 import type { OnlineBookProvider } from '../src/onlineBookProvider.js';
 import { aggregateOnlineBookSearch } from '../src/onlineBookService.js';
 import type { OnlineBook, OnlineBookSource } from '../src/types.js';
@@ -75,6 +76,27 @@ test('returns successful results and a source error when one provider fails', as
   assert.equal(result.hasNextPage, false);
   assert.deepEqual(result.sourceErrors, [
     { source: 'wikisource', code: 'BOOK_SOURCE_UNAVAILABLE' },
+  ]);
+});
+
+test('preserves a concrete provider error code in partial-failure source errors', async () => {
+  const providers = [
+    provider('wikisource', async () => {
+      throw new OnlineBookError('ONLINE_BOOK_NOT_FOUND', 404);
+    }),
+    provider('gutenberg', async (_query, page) => ({
+      items: [onlineBook('gutenberg', '84')],
+      page,
+      total: 1,
+      hasNextPage: false,
+      sourceErrors: [],
+    })),
+  ];
+
+  const result = await aggregateOnlineBookSearch(providers, 'frankenstein', 1);
+
+  assert.deepEqual(result.sourceErrors, [
+    { source: 'wikisource', code: 'ONLINE_BOOK_NOT_FOUND' },
   ]);
 });
 

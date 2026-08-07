@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import JSZip from 'jszip';
-import { normalizeGutendexBook, searchGutendex } from '../src/gutendex.js';
+import {
+  createGutendexProvider,
+  normalizeGutendexBook,
+  OnlineBookError,
+  searchGutendex,
+} from '../src/gutendex.js';
 import { parseOnlineEpub, parseOnlineText, stripGutenbergBoilerplate } from '../src/onlineBookParser.js';
+import type { OnlineBookImportResult } from '../src/types.js';
 
 test('normalizes Gutendex metadata without flattening authors', () => {
   const book = normalizeGutendexBook({
@@ -37,6 +43,31 @@ test('keeps authorized and unknown Gutenberg rights states distinguishable', () 
   assert.equal(normalizeGutendexBook({ id: 2, title: 'B', copyright: null })?.copyrightStatus, 'unknown');
 });
 
+test('Gutenberg provider delegates import arguments and returns the exact import result', async () => {
+  const importedResult: OnlineBookImportResult = {
+    book: {
+      id: 'import-gutenberg-1342',
+      title: 'Pride and Prejudice',
+      progress: '新导入',
+      accent: '#426f76',
+      currentChapterId: 'import-gutenberg-1342-chapter-1',
+      lastReadLabel: '准备开始第一章',
+    },
+    chapters: [],
+    alreadyImported: false,
+  };
+  const calls: Array<{ sourceBookId: string; visualStyle: string }> = [];
+  const gutendexProvider = createGutendexProvider(async (sourceBookId, visualStyle) => {
+    calls.push({ sourceBookId, visualStyle });
+    return importedResult;
+  });
+
+  const result = await gutendexProvider.importBook('1342', '插画');
+
+  assert.deepEqual(calls, [{ sourceBookId: '1342', visualStyle: '插画' }]);
+  assert.strictEqual(result, importedResult);
+});
+
 test('search uses provider pagination and preserves provider order', async () => {
   const originalFetch = globalThis.fetch;
   const originalBaseUrl = process.env.GUTENDEX_BASE_URL;
@@ -61,6 +92,26 @@ test('search uses provider pagination and preserves provider order', async () =>
     assert.equal(result.total, 40);
     assert.equal(result.hasNextPage, true);
     assert.deepEqual(result.sourceErrors, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalBaseUrl === undefined) delete process.env.GUTENDEX_BASE_URL;
+    else process.env.GUTENDEX_BASE_URL = originalBaseUrl;
+  }
+});
+
+test('Gutenberg search failures retain the shared OnlineBookError class and code', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalBaseUrl = process.env.GUTENDEX_BASE_URL;
+  process.env.GUTENDEX_BASE_URL = 'https://gutendex.test';
+  globalThis.fetch = async () => new Response('', { status: 503 });
+
+  try {
+    await assert.rejects(searchGutendex('outage', 1), (error: unknown) => {
+      assert.equal(error instanceof OnlineBookError, true);
+      assert.equal((error as OnlineBookError).code, 'BOOK_SOURCE_UNAVAILABLE');
+      assert.equal((error as OnlineBookError).status, 502);
+      return true;
+    });
   } finally {
     globalThis.fetch = originalFetch;
     if (originalBaseUrl === undefined) delete process.env.GUTENDEX_BASE_URL;
