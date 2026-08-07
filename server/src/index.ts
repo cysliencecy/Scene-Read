@@ -4,6 +4,8 @@ import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { OnlineBookError } from './gutendex.js';
+import { importGutendexBook, searchOnlineBooks } from './onlineBookService.js';
 import {
   createBook,
   createChapter,
@@ -220,6 +222,43 @@ app.use(express.json({ limit: process.env.JSON_BODY_LIMIT ?? '25mb' }));
 
 app.get('/health', (_request, response) => {
   response.json({ ok: true, service: 'scene-reader-api', dataMode });
+});
+
+app.get('/online-books/search', async (request, response, next) => {
+  try {
+    const query = typeof request.query.q === 'string' ? request.query.q.trim() : '';
+    const page = Number(request.query.page ?? 1);
+    if (!query || query.length > 100) {
+      response.status(400).json({ error: 'INVALID_SEARCH_QUERY', message: '请输入 1-100 个字符的书名或作者。' });
+      return;
+    }
+    if (!Number.isInteger(page) || page < 1 || page > 1000) {
+      response.status(400).json({ error: 'INVALID_PAGE' });
+      return;
+    }
+    response.json({ data: await searchOnlineBooks(query, page) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/online-books/import', async (request, response, next) => {
+  try {
+    const source = request.body?.source;
+    const sourceBookId = request.body?.sourceBookId;
+    const visualStyle = request.body?.visualStyle;
+    if (source !== 'gutenberg' || typeof sourceBookId !== 'string') {
+      response.status(400).json({ error: 'INVALID_ONLINE_BOOK' });
+      return;
+    }
+    if (visualStyle !== '写实' && visualStyle !== '动漫' && visualStyle !== '插画') {
+      response.status(400).json({ error: 'INVALID_VISUAL_STYLE' });
+      return;
+    }
+    response.status(201).json({ data: await importGutendexBook(sourceBookId, visualStyle) });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/books', async (_request, response, next) => {
@@ -564,6 +603,11 @@ app.post('/worker/scene-images', async (request, response, next) => {
 });
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
+  if (error instanceof OnlineBookError) {
+    response.status(error.status).json({ error: error.code, message: error.message });
+    return;
+  }
+
   if (error instanceof Error && error.message === 'SUPABASE_NOT_CONFIGURED') {
     response.status(503).json({
       error: 'SUPABASE_NOT_CONFIGURED',

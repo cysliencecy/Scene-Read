@@ -1,15 +1,20 @@
 ﻿import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { styleOptions } from '../data/mockData';
+import { ActivityIndicator } from 'react-native';
 import { colors } from '../theme/colors';
 import { sharedStyles } from '../theme/sharedStyles';
 import type { VisualStyle } from '../types/app';
 
 export function StyleScreen({
   selected,
+  error,
+  isStarting = false,
   onSelect,
   onStart,
 }: {
   selected: VisualStyle;
+  error?: string | null;
+  isStarting?: boolean;
   onSelect: (style: VisualStyle) => void;
   onStart: () => void;
 }) {
@@ -23,6 +28,7 @@ export function StyleScreen({
           return (
             <Pressable
               accessibilityRole="button"
+              disabled={isStarting}
               key={option.name}
               onPress={() => onSelect(option.name)}
               style={[styles.styleCard, active && styles.styleCardActive]}
@@ -43,8 +49,14 @@ export function StyleScreen({
         })}
       </View>
 
-      <Pressable accessibilityRole="button" onPress={onStart} style={sharedStyles.primaryButton}>
-        <Text style={sharedStyles.primaryButtonText}>开始阅读</Text>
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      <Pressable
+        accessibilityRole="button"
+        disabled={isStarting}
+        onPress={onStart}
+        style={[sharedStyles.primaryButton, isStarting && styles.disabledButton]}
+      >
+        {isStarting ? <ActivityIndicator color="#fff" /> : <Text style={sharedStyles.primaryButtonText}>开始阅读</Text>}
       </Pressable>
     </ScrollView>
   );
@@ -71,4 +83,6 @@ const styles = StyleSheet.create({
   styleDescription: { marginTop: 6, color: colors.muted, fontSize: 12, lineHeight: 18 },
   radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#c7bdae' },
   radioActive: { borderWidth: 6, borderColor: colors.deep },
+  errorText: { marginTop: 18, color: '#9d3b34', fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  disabledButton: { opacity: 0.65 },
 });

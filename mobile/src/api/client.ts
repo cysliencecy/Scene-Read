@@ -1,5 +1,7 @@
 import type { Book, Chapter, GenerationTask, SceneCandidate, SceneImage } from '../types/app';
 
+import type { OnlineBookImportResult, OnlineBookSearchPage, VisualStyle } from '../types/app';
+
 const normalizeBaseUrl = (url: string) => url.replace(/\/+$/, '');
 
 const getDefaultApiBaseUrl = () => {
@@ -16,11 +18,20 @@ type ApiResponse<T> = {
   data: T;
 };
 
+const apiError = async (path: string, response: Response) => {
+  const payload = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+  const error = new Error(payload?.message || payload?.error || `API ${path} failed with ${response.status}`) as Error & {
+    code?: string;
+  };
+  error.code = payload?.error;
+  return error;
+};
+
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`);
 
   if (!response.ok) {
-    throw new Error(`API ${path} failed with ${response.status}`);
+    throw await apiError(path, response);
   }
 
   const payload = (await response.json()) as ApiResponse<T>;
@@ -37,7 +48,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`API ${path} failed with ${response.status}`);
+    throw await apiError(path, response);
   }
 
   const payload = (await response.json()) as ApiResponse<T>;
@@ -50,7 +61,7 @@ async function deleteJson<T>(path: string): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`API ${path} failed with ${response.status}`);
+    throw await apiError(path, response);
   }
 
   const payload = (await response.json()) as ApiResponse<T>;
@@ -59,6 +70,19 @@ async function deleteJson<T>(path: string): Promise<T> {
 
 export async function fetchBooks() {
   return getJson<Book[]>('/books');
+}
+
+export async function searchOnlineBooks(query: string, page = 1) {
+  const params = new URLSearchParams({ q: query, page: String(page) });
+  return getJson<OnlineBookSearchPage>(`/online-books/search?${params.toString()}`);
+}
+
+export async function importOnlineBook(sourceBookId: string, visualStyle: VisualStyle) {
+  return postJson<OnlineBookImportResult>('/online-books/import', {
+    source: 'gutenberg',
+    sourceBookId,
+    visualStyle,
+  });
 }
 
 export async function fetchChapter(chapterId: string) {

@@ -10,7 +10,9 @@ import {
   fetchSceneImages,
   fetchSceneCandidates,
   importBook,
+  importOnlineBook,
   retryGenerationTask,
+  searchOnlineBooks,
   submitChapterGenerationTask,
 } from './src/api/client';
 import { pickAndParseBook, type ImportedBookDraft } from './src/import/bookImport';
@@ -28,9 +30,33 @@ import { SceneDebugScreen } from './src/screens/SceneDebugScreen';
 import { ShelfScreen } from './src/screens/ShelfScreen';
 import { StyleScreen } from './src/screens/StyleScreen';
 import { colors } from './src/theme/colors';
-import type { Book, Chapter, GenerationTask, SceneCandidate, SceneImage, VisualStyle } from './src/types/app';
+import type {
+  Book,
+  Chapter,
+  GenerationTask,
+  OnlineBook,
+  OnlineBookSearchPage,
+  SceneCandidate,
+  SceneImage,
+  VisualStyle,
+} from './src/types/app';
 
 const POLLING_INTERVAL_MS = 3000;
+
+const onlineErrorMessage = (error: unknown) => {
+  const message = error instanceof Error ? error.message : '';
+  const code = error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : message;
+  const messages: Record<string, string> = {
+    BOOK_SOURCE_UNAVAILABLE: '在线书源暂时不可用，请稍后重试。',
+    BOOK_DOWNLOAD_FAILED: '书籍下载失败，请稍后重试。',
+    BOOK_DOWNLOAD_TOO_LARGE: '这本书超过 20 MB，暂不支持导入。',
+    ONLINE_BOOK_FORMAT_UNSUPPORTED: '这本书没有可用的 EPUB 或 UTF-8 TXT 格式。',
+    ONLINE_BOOK_PARSE_FAILED: '这本书的文件无法解析，请换一本试试。',
+    ONLINE_BOOK_HAS_NO_READABLE_TEXT: '没有解析到可阅读的正文。',
+    SUPABASE_NOT_CONFIGURED: '存储服务未配置，现在可以搜索，但不能导入。',
+  };
+  return messages[code] ?? message ?? '操作失败，请稍后重试。';
+};
 
 export default function App() {
   const [navigation, setNavigation] = useState<AppNavigationState>(initialNavigationState);
@@ -41,9 +67,16 @@ export default function App() {
   const [sceneCandidates, setSceneCandidates] = useState<SceneCandidate[]>([]);
   const [apiStatus, setApiStatus] = useState<'loading' | 'connected' | 'fallback'>('loading');
   const [pendingImportDraft, setPendingImportDraft] = useState<ImportedBookDraft | null>(null);
+  const [pendingOnlineBook, setPendingOnlineBook] = useState<OnlineBook | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [syncingBookIds, setSyncingBookIds] = useState<string[]>([]);
+  const [onlineQuery, setOnlineQuery] = useState('');
+  const [onlinePage, setOnlinePage] = useState<OnlineBookSearchPage | null>(null);
+  const [onlineError, setOnlineError] = useState<string | null>(null);
+  const [isSearchingOnline, setIsSearchingOnline] = useState(false);
+  const [isImportingOnline, setIsImportingOnline] = useState(false);
+  const [styleError, setStyleError] = useState<string | null>(null);
   const [readerChapterEntry, setReaderChapterEntry] = useState<ReaderChapterEntry>('saved');
   const [isEditingShelf, setIsEditingShelf] = useState(false);
   const [selectedImportedBookIds, setSelectedImportedBookIds] = useState<string[]>([]);
@@ -225,10 +258,7 @@ export default function App() {
     setNavigation((current) => ({ ...current, route: nextRoute }));
   };
 
-  const openBook = async (bookId: string) => {
-    const book = shelfBooks.find((item) => item.id === bookId);
-    if (!book) return;
-
+  const openBookRecord = async (book: Book) => {
     const savedChapterId = await loadLastReaderChapter(book.id).catch(() => null);
     setReaderChapterEntry('saved');
     setNavigation((current) => ({
@@ -237,6 +267,11 @@ export default function App() {
       selectedChapterId: savedChapterId ?? book.currentChapterId,
       route: { name: 'Reader' },
     }));
+  };
+
+  const openBook = async (bookId: string) => {
+    const book = shelfBooks.find((item) => item.id === bookId);
+    if (book) await openBookRecord(book);
   };
 
   const selectReaderChapter = (chapterId: string, entry: ReaderChapterEntry) => {
@@ -304,6 +339,14 @@ export default function App() {
     setGenerationTasks((current) => current.filter((task) => !selectedChapterIds.has(task.chapterId)));
     setSceneImages((current) => current.filter((image) => !selectedChapterIds.has(image.chapterId)));
     setSceneCandidates((current) => current.filter((candidate) => !selectedChapterIds.has(candidate.chapterId)));
+    setOnlinePage((current) => current ? {
+      ...current,
+      items: current.items.map((book) =>
+        book.importedBookId && selectedIds.has(book.importedBookId)
+          ? { ...book, importedBookId: undefined }
+          : book,
+      ),
+    } : current);
 
     clearShelfEditing();
 
@@ -350,6 +393,51 @@ export default function App() {
     }
   };
 
+  const runOnlineSearch = async (page = 1) => {
+    const query = onlineQuery.trim();
+    if (!query || isSearchingOnline) return;
+    setOnlineError(null);
+    setIsSearchingOnline(true);
+    if (page === 1) setOnlinePage(null);
+
+    try {
+      const result = await searchOnlineBooks(query, page);
+      setOnlinePage((current) =>
+        page === 1 || !current ? result : { ...result, items: [...current.items, ...result.items] },
+      );
+      setApiStatus('connected');
+    } catch (error) {
+      setOnlineError(onlineErrorMessage(error));
+    } finally {
+      setIsSearchingOnline(false);
+    }
+  };
+
+  const selectOnlineBook = async (book: OnlineBook) => {
+    setOnlineError(null);
+    if (book.importedBookId) {
+      const localBook = shelfBooks.find((item) => item.id === book.importedBookId);
+      if (localBook) {
+        await openBookRecord(localBook);
+        return;
+      }
+      try {
+        const books = await fetchBooks();
+        setShelfBooks(books);
+        const importedBook = books.find((item) => item.id === book.importedBookId);
+        if (importedBook) await openBookRecord(importedBook);
+      } catch (error) {
+        setOnlineError(onlineErrorMessage(error));
+      }
+      return;
+    }
+
+    setPendingImportDraft(null);
+    setPendingOnlineBook(book);
+    setStyleError(null);
+    navigate({ name: 'Style' });
+  };
+
   const beginFileImport = async () => {
     clearShelfEditing();
     setImportError(null);
@@ -365,6 +453,8 @@ export default function App() {
       }
 
       setPendingImportDraft(draft);
+      setPendingOnlineBook(null);
+      setStyleError(null);
       navigate({ name: 'Style' });
     } catch (error) {
       setImportError(error instanceof Error ? error.message : 'File parsing failed');
@@ -373,7 +463,44 @@ export default function App() {
     }
   };
 
-  const completeImport = () => {
+  const completeImport = async () => {
+    if (pendingOnlineBook) {
+      setStyleError(null);
+      setIsImportingOnline(true);
+      try {
+        const result = await importOnlineBook(pendingOnlineBook.sourceBookId, navigation.visualStyle);
+        setShelfBooks((current) => [result.book, ...current.filter((book) => book.id !== result.book.id)]);
+        setChaptersById((current) => {
+          const next = { ...current };
+          result.chapters.forEach((chapter) => {
+            next[chapter.id] = chapter;
+          });
+          return next;
+        });
+        setOnlinePage((current) => current ? {
+          ...current,
+          items: current.items.map((book) =>
+            book.sourceBookId === pendingOnlineBook.sourceBookId ? { ...book, importedBookId: result.book.id } : book,
+          ),
+        } : current);
+        setNavigation((current) => ({
+          ...current,
+          selectedBookId: result.book.id,
+          selectedChapterId: result.book.currentChapterId,
+          route: { name: 'Reader' },
+        }));
+        setReaderChapterEntry('start');
+        saveLastReaderChapter(result.book.id, result.book.currentChapterId).catch(() => undefined);
+        setPendingOnlineBook(null);
+        setApiStatus('connected');
+      } catch (error) {
+        setStyleError(onlineErrorMessage(error));
+      } finally {
+        setIsImportingOnline(false);
+      }
+      return;
+    }
+
     const draft = pendingImportDraft;
     if (!draft) {
       navigate({ name: 'Reader' });
@@ -469,6 +596,10 @@ export default function App() {
             selectedBookIds={selectedImportedBookIds}
             onImport={() => {
               clearShelfEditing();
+              setPendingImportDraft(null);
+              setPendingOnlineBook(null);
+              setImportError(null);
+              setStyleError(null);
               navigate({ name: 'Import' });
             }}
             onRemoveSelectedImportedBooks={removeSelectedImportedBooks}
@@ -478,7 +609,7 @@ export default function App() {
           />
         ) : route.name !== 'Reader' ? (
           <View style={styles.header}>
-            <Pressable accessibilityRole="button" onPress={goBack} style={styles.roundButton}>
+            <Pressable accessibilityRole="button" disabled={isImportingOnline} onPress={goBack} style={styles.roundButton}>
               <Text style={styles.roundButtonText}>{'<'}</Text>
             </Pressable>
             <Text style={styles.headerTitle}>{title}</Text>
@@ -490,13 +621,24 @@ export default function App() {
           <ImportScreen
             error={importError}
             importedDraft={pendingImportDraft}
+            initialTab={pendingOnlineBook ? 'online' : 'local'}
             isImporting={isImporting}
+            isSearching={isSearchingOnline}
+            onlineError={onlineError}
+            onlinePage={onlinePage}
+            query={onlineQuery}
+            onLoadMore={() => runOnlineSearch((onlinePage?.page ?? 0) + 1)}
             onPickBook={beginFileImport}
+            onQueryChange={setOnlineQuery}
+            onSearch={() => runOnlineSearch(1)}
+            onSelectOnlineBook={selectOnlineBook}
           />
         )}
         {route.name === 'Style' && (
           <StyleScreen
             selected={navigation.visualStyle}
+            error={styleError}
+            isStarting={isImportingOnline}
             onSelect={setVisualStyle}
             onStart={completeImport}
           />

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme/colors';
+import { Image } from 'react-native';
 import { sharedStyles } from '../theme/sharedStyles';
 import type { Book } from '../types/app';
 
@@ -61,7 +62,7 @@ export function ShelfScreen({
             <Text style={styles.heroTitle}>导入第一本书</Text>
             <Text style={styles.heroDescription}>支持 TXT / EPUB，导入后可以直接进入第一章阅读。</Text>
             <Pressable accessibilityRole="button" onPress={onImport} style={styles.heroAction}>
-              <Text style={styles.heroActionText}>导入本地书</Text>
+              <Text style={styles.heroActionText}>导入书籍</Text>
             </Pressable>
           </View>
         )}
@@ -70,7 +71,7 @@ export function ShelfScreen({
           <Text style={styles.sectionTitle}>我的书架</Text>
           <View style={styles.sectionActions}>
             <Pressable accessibilityRole="button" onPress={onImport} style={styles.sectionAction}>
-              <Text style={styles.sectionActionText}>导入本地书</Text>
+              <Text style={styles.sectionActionText}>导入书籍</Text>
             </Pressable>
             <Pressable accessibilityRole="button" onPress={onToggleEditingShelf} style={styles.sectionActionSecondary}>
               <Text style={styles.sectionActionText}>{isEditingShelf ? '完成' : '编辑'}</Text>
@@ -109,14 +110,15 @@ export function ShelfScreen({
                   selected && styles.bookCoverSelected,
                 ]}
               >
+                {book.coverUrl ? <Image source={{ uri: book.coverUrl }} style={styles.bookCoverImage} /> : null}
                 {isEditingShelf && canRemove ? (
                   <View style={[styles.selectionBadge, selected && styles.selectionBadgeActive]}>
                     <Text style={styles.selectionBadgeText}>{selected ? '✓' : ''}</Text>
                   </View>
                 ) : null}
-                <View style={styles.bookShine} />
+                <View style={[styles.bookShine, book.coverUrl && styles.bookImageShade]} />
                 <Text style={styles.bookTitle}>{book.title}</Text>
-                <Text style={styles.bookMeta}>{book.progress}</Text>
+                <Text style={styles.bookMeta}>{book.authors?.[0] ?? book.progress}</Text>
               </Pressable>
             );
           })}
@@ -224,6 +226,7 @@ const styles = StyleSheet.create({
   },
   bookCoverLocked: { opacity: 0.5 },
   bookCoverSelected: { borderColor: '#fff' },
+  bookCoverImage: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   selectionBadge: {
     position: 'absolute',
     top: 8,
@@ -249,6 +252,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.16)',
     transform: [{ rotate: '-14deg' }],
   },
+  bookImageShade: { top: 72, height: 100, backgroundColor: 'rgba(16,24,21,0.58)', transform: [] },
   bookTitle: { color: '#fff', fontSize: 13, lineHeight: 18, fontWeight: '800' },
   bookMeta: { marginTop: 5, color: 'rgba(255,255,255,0.78)', fontSize: 10 },
   importBookCover: {
