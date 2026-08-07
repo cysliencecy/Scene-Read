@@ -1,24 +1,101 @@
 from __future__ import annotations
-import json, os, urllib.request
-from .types import ImageAuditResult, ImageAuditRuleResult, GeneratedImageArtifact, ImageGenerationRequest
 
-def _text(value, name):
-    if not isinstance(value, str) or not value.strip(): raise ValueError(f"Audit requires string {name}.")
-    return value
+import json
+import os
+import urllib.request
+from dataclasses import asdict
+from typing import Any
+
+from .types import (
+    GeneratedImageArtifact,
+    ImageAuditResult,
+    ImageAuditRuleResult,
+    ImageGenerationRequest,
+)
+
+
+def _required_text(value: Any, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Audit requires non-empty string {name}.")
+    return value.strip()
+
 
 def parse_audit_result(raw: dict) -> ImageAuditResult:
-    if not isinstance(raw, dict) or not isinstance(raw.get("rules"), list) or not raw["rules"]: raise ValueError("Audit requires rules list.")
-    if type(raw.get("severeFactConflict")) is not bool: raise ValueError("Audit requires boolean severeFactConflict.")
-    rules=[]
-    for value in raw["rules"]:
-        if not isinstance(value, dict) or type(value.get("passed")) is not bool or value.get("severity") not in ("info","warning","severe"): raise ValueError("Invalid audit rule.")
-        rules.append(ImageAuditRuleResult(_text(value.get("rule"),"rule"),value["passed"],value["severity"],_text(value.get("explanation"),"explanation")))
-    severe=raw["severeFactConflict"] or any(not r.passed and r.severity=="severe" for r in rules)
-    return ImageAuditResult("blocked" if severe else "publishable",tuple(rules),raw["severeFactConflict"],_text(raw.get("provider"),"provider"),_text(raw.get("model"),"model"),_text(raw.get("auditVersion"),"auditVersion"))
+    if not isinstance(raw, dict):
+        raise ValueError("Audit response root must be an object.")
+    raw_rules = raw.get("rules")
+    if not isinstance(raw_rules, list) or not raw_rules:
+        raise ValueError("Audit requires a non-empty rules list.")
+    if type(raw.get("severeFactConflict")) is not bool:
+        raise ValueError("Audit requires boolean severeFactConflict.")
 
-def audit_image(artifact: GeneratedImageArtifact, request: ImageGenerationRequest) -> dict:
-    endpoint=os.getenv("VISION_AUDIT_ENDPOINT")
-    if not endpoint: raise RuntimeError("VISION_AUDIT_ENDPOINT is required for formal generation.")
-    body={"model":os.getenv("VISION_AUDIT_MODEL"),"auditVersion":os.getenv("VISION_AUDIT_VERSION"),"imageBase64":artifact.imageBase64,"requestedType":request.requestedType,"aspectRatio":request.aspectRatio}
-    req=urllib.request.Request(endpoint,data=json.dumps(body).encode(),headers={"Content-Type":"application/json"},method="POST")
-    with urllib.request.urlopen(req,timeout=60) as response: return json.loads(response.read().decode())
+    rules: list[ImageAuditRuleResult] = []
+    for value in raw_rules:
+        if not isinstance(value, dict):
+            raise ValueError("Every audit rule must be an object.")
+        if type(value.get("passed")) is not bool:
+            raise ValueError("Every audit rule requires boolean passed.")
+        severity = value.get("severity")
+        if severity not in ("info", "warning", "severe"):
+            raise ValueError("Every audit rule requires a supported severity.")
+        rules.append(
+            ImageAuditRuleResult(
+                rule=_required_text(value.get("rule"), "rule"),
+                passed=value["passed"],
+                severity=severity,
+                explanation=_required_text(value.get("explanation"), "explanation"),
+            )
+        )
+
+    severe = raw["severeFactConflict"] or any(
+        not rule.passed and rule.severity == "severe" for rule in rules
+    )
+    return ImageAuditResult(
+        verdict="blocked" if severe else "publishable",
+        rules=tuple(rules),
+        severeFactConflict=raw["severeFactConflict"],
+        provider=_required_text(raw.get("provider"), "provider"),
+        model=_required_text(raw.get("model"), "model"),
+        auditVersion=_required_text(raw.get("auditVersion"), "auditVersion"),
+    )
+
+
+def _audit_configuration() -> tuple[str, str, str]:
+    values = (
+        os.getenv("VISION_AUDIT_ENDPOINT"),
+        os.getenv("VISION_AUDIT_MODEL"),
+        os.getenv("VISION_AUDIT_VERSION"),
+    )
+    names = ("VISION_AUDIT_ENDPOINT", "VISION_AUDIT_MODEL", "VISION_AUDIT_VERSION")
+    missing = [
+        name
+        for name, value in zip(names, values)
+        if not isinstance(value, str) or not value.strip()
+    ]
+    if missing:
+        raise RuntimeError(
+            f"Formal image audit requires non-empty configuration: {', '.join(missing)}."
+        )
+    return values[0].strip(), values[1].strip(), values[2].strip()
+
+
+def audit_image(
+    artifact: GeneratedImageArtifact,
+    request: ImageGenerationRequest,
+) -> ImageAuditResult:
+    endpoint, model, version = _audit_configuration()
+    body = {
+        "model": model,
+        "auditVersion": version,
+        "image": asdict(artifact),
+        "request": asdict(request),
+    }
+    transport_request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(transport_request, timeout=60) as response:
+        response_payload = json.loads(response.read().decode("utf-8"))
+    return parse_audit_result(response_payload)

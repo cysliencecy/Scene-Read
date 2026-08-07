@@ -141,7 +141,13 @@ class ProcessorTest(unittest.TestCase):
             url = request.full_url if hasattr(request, "full_url") else request
             if "images/generations" in url:
                 return FakeResponse(b'{"data":[{"url":"https://example.com/generated.png"}]}', "application/json")
-            return FakeResponse(b"png-bytes", "image/png")
+            png_header = (
+                b"\x89PNG\r\n\x1a\n"
+                b"\x00\x00\x00\rIHDR"
+                + (900).to_bytes(4, "big")
+                + (600).to_bytes(4, "big")
+            )
+            return FakeResponse(png_header, "image/png")
 
         with patch.dict("os.environ", {"GLM_API_KEY": "test-key"}, clear=False):
             with patch("urllib.request.urlopen", side_effect=fake_urlopen):

@@ -24,8 +24,10 @@ StoredImageType = Literal[
 ]
 ClassificationStatus = Literal["eligible", "below_threshold", "invalid"]
 AttemptTrigger = Literal["automatic", "manual"]
-AttemptStatus = Literal["queued", "generation_failed", "audit_failed", "blocked", "publishable"]
-VisualStyle = Literal["写实", "动漫", "插图"]
+AttemptStatus = Literal[
+    "queued", "generation_failed", "audit_failed", "blocked", "publishable"
+]
+VisualStyle = Literal["写实", "动漫", "插画"]
 
 # Kept as a compatibility alias while legacy SceneCandidate records are still read.
 # New classification code must use CanonicalImageType and require_canonical_image_type.
@@ -171,6 +173,11 @@ class ImageGenerationRequest:
     aspectRatio: Literal["3:2"]
     contractVersion: str
 
+    def __post_init__(self) -> None:
+        require_canonical_image_type(self.requestedType)
+        if self.aspectRatio != "3:2":
+            raise ValueError("Formal image generation requests require aspectRatio='3:2'.")
+
 
 @dataclass(frozen=True)
 class GeneratedImageArtifact:
@@ -217,6 +224,17 @@ class SceneCandidate:
 
 
 @dataclass(frozen=True)
+class ClassifiedCandidate:
+    """A discovery seed paired with its complete, validated classification snapshot."""
+
+    seed: CandidateSeed
+    classification: CandidateClassification
+    provider: Literal["kimi", "heuristic"]
+    contractVersion: str = COMPOSITION_CONTRACT_VERSION
+    profileVersion: str = PROFILE_VERSION
+
+
+@dataclass(frozen=True)
 class WorkerLog:
     level: Literal["info", "warning", "error"]
     message: str
@@ -232,3 +250,5 @@ class WorkerResult:
     candidates: list[SceneCandidate]
     provider: Literal["openai", "heuristic"]
     logs: list[WorkerLog]
+    classifiedCandidates: tuple[ClassifiedCandidate, ...] = ()
+    profiles: tuple[BookVisualProfile, ...] = ()

@@ -1,10 +1,12 @@
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 from scene_reader_worker.processor import (
     ClassifiedCandidate,
     formal_generation_eligible,
     order_classified_candidates,
+    process_chapter,
 )
 from scene_reader_worker.prompt import (
     DISCOVERY_SYSTEM_PROMPT,
@@ -189,6 +191,55 @@ class ClassificationPipelineTest(unittest.TestCase):
 
         self.assertTrue(formal_generation_eligible(eligible, provider="kimi"))
         self.assertFalse(formal_generation_eligible(eligible, provider="heuristic"))
+
+    def test_process_chapter_preserves_full_classifications_and_profile_snapshot(self) -> None:
+        eligible = replace(
+            classified(seed("p1", 1, 0.91), "environment", 0.88),
+            contractVersion="contract-snapshot-7",
+            profileVersion="profile-snapshot-7",
+        )
+        below_threshold = replace(
+            classified(seed("p2", 2, 0.82), "portrait", 0.64),
+            contractVersion="contract-snapshot-7",
+            profileVersion="profile-snapshot-7",
+        )
+        profile = BookVisualProfile(
+            id="profile-2",
+            bookId="book-1",
+            entityType="location",
+            entityKey="bridge",
+            stableFacts=(
+                VisualProfileFact(
+                    field="material",
+                    value="weathered stone",
+                    sourceBlockId="p1",
+                    sourceText="The bridge was weathered stone.",
+                    stability="stable",
+                ),
+            ),
+            flexibleFacts=(),
+            version="profile-snapshot-7",
+        )
+
+        with patch(
+            "scene_reader_worker.processor.classify_chapter",
+            return_value=([eligible, below_threshold], []),
+        ):
+            result = process_chapter(PAYLOAD, provider="openai", profiles=(profile,))
+
+        self.assertEqual(result.classifiedCandidates, (eligible, below_threshold))
+        self.assertEqual(result.profiles, (profile,))
+        self.assertEqual(result.classifiedCandidates[0].contractVersion, "contract-snapshot-7")
+        self.assertEqual(result.classifiedCandidates[0].profileVersion, "profile-snapshot-7")
+        self.assertEqual([candidate.id for candidate in result.candidates], [eligible.seed.id])
+        self.assertEqual(
+            result.classifiedCandidates[0].classification.rankedTypes,
+            eligible.classification.rankedTypes,
+        )
+        self.assertEqual(
+            result.classifiedCandidates[1].classification.status,
+            "below_threshold",
+        )
 
 
 if __name__ == "__main__":

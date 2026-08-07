@@ -57,7 +57,6 @@ For manual Worker runs, put GLM image settings in `worker/.env`:
 IMAGE_PROVIDER=glm
 GLM_API_KEY=your-glm-or-bigmodel-key
 GLM_IMAGE_MODEL=glm-image
-GLM_IMAGE_SIZE=1024x1024
 ```
 
 For App import flow triggered by the server, also put the image provider in `server/.env`, because the server process starts the Worker:
@@ -68,8 +67,10 @@ WORKER_SCENE_PROVIDER=auto
 WORKER_MAX_IMAGES=1
 GLM_API_KEY=your-glm-or-bigmodel-key
 GLM_IMAGE_MODEL=glm-image
-GLM_IMAGE_SIZE=1024x1024
 ```
+
+Formal GLM requests always use the code-owned supported landscape size `1536x1024`;
+there is no runtime size override.
 
 Do not commit real API keys.
 
