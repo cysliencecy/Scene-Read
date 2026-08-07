@@ -13,7 +13,7 @@ import {
   dataMode,
   deleteBook,
   findImageGenerationAttemptByKey,
-  findImageGenerationAttemptByTask,
+  findManualImageGenerationAttemptByTask,
   getBook,
   getChapter,
   getGenerationTask,
@@ -493,7 +493,7 @@ app.get('/worker/tasks/:taskId/chapter-payload', async (request, response, next)
 
     const bookId = task.bookId ?? chapter.bookId;
     const profiles = await listBookVisualProfiles(bookId);
-    const manualAttempt = await findImageGenerationAttemptByTask(task.id);
+    const manualAttempt = await findManualImageGenerationAttemptByTask(task.id);
     const manualCandidate = manualAttempt ? await getSceneCandidate(manualAttempt.candidateId) : null;
     const reclassification = manualReclassificationInstructions.get(task.id) ?? persistedReclassificationInstruction(task.id);
 
@@ -505,7 +505,7 @@ app.get('/worker/tasks/:taskId/chapter-payload', async (request, response, next)
         chapterTitle: chapter.title,
         blocks: chapter.blocks.filter((block) => block.type === 'paragraph'),
         profiles,
-        ...(manualAttempt && manualCandidate ? {
+        ...(manualAttempt?.trigger === 'manual' && manualCandidate ? {
           manualGeneration: {
             kind: 'generate',
             idempotencyKey: manualAttempt.idempotencyKey,
@@ -675,6 +675,13 @@ app.post('/scene-candidates/:candidateId/regenerations', async (request, respons
         throw new ApiInputError(API_ERROR_CODES.idempotencyKeyRequired);
       }
       const taskId = reclassificationTaskId(candidate.id, body.idempotencyKey);
+      const existingTask = await getGenerationTask(taskId);
+      const instruction = { kind: 'reclassify' as const, candidateId: candidate.id, idempotencyKey: body.idempotencyKey };
+      if (existingTask) {
+        manualReclassificationInstructions.set(existingTask.id, instruction);
+        response.status(202).json({ data: { task: existingTask, instruction } });
+        return;
+      }
       const task = await createGenerationTask({
         id: taskId,
         bookId: candidate.bookId,
@@ -684,7 +691,6 @@ app.post('/scene-candidates/:candidateId/regenerations', async (request, respons
         taskType: 'scene_image',
         label: 'Legacy character candidate queued for canonical reclassification',
       });
-      const instruction = { kind: 'reclassify' as const, candidateId: candidate.id, idempotencyKey: body.idempotencyKey };
       manualReclassificationInstructions.set(task.id, instruction);
       response.status(202).json({ data: { task, instruction } });
       runWorkerForTask(task.id);

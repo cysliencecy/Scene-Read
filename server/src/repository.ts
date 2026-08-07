@@ -51,6 +51,26 @@ export type PersistedCandidateInput = {
 export type ProfileUpsertInput = Omit<BookVisualProfile, 'id'>;
 export type AttemptUpsertInput = Omit<ImageGenerationAttempt, 'id' | 'createdAt'> & { id?: string };
 
+function preserveQueuedAttemptFields(
+  existing: ImageGenerationAttempt,
+  terminal: AttemptUpsertInput,
+): AttemptUpsertInput {
+  return {
+    ...terminal,
+    id: existing.id,
+    idempotencyKey: existing.idempotencyKey,
+    candidateId: existing.candidateId,
+    taskId: existing.taskId,
+    parentAttemptId: existing.parentAttemptId,
+    trigger: existing.trigger,
+    requestedType: existing.requestedType,
+    overriddenFrom: existing.overriddenFrom,
+    classificationSnapshot: existing.classificationSnapshot,
+    contractVersion: existing.contractVersion,
+    profileVersion: existing.profileVersion,
+  };
+}
+
 const createId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 const toBook = (row: NonNullable<typeof supabase> extends never ? never : {
@@ -268,8 +288,9 @@ export function createInMemoryImageRepository(options: { legacyImages?: SceneIma
       const existing = attemptsByKey.get(input.idempotencyKey);
       if (existing && existing.status !== 'queued') return existing;
       if (existing && input.status === 'queued') return existing;
+      const persistedInput = existing ? preserveQueuedAttemptFields(existing, input) : input;
       const attempt: ImageGenerationAttempt = {
-        ...input,
+        ...persistedInput,
         id: existing?.id ?? input.id ?? createId('attempt'),
         createdAt: existing?.createdAt ?? new Date().toISOString(),
       };
@@ -304,8 +325,8 @@ export function createInMemoryImageRepository(options: { legacyImages?: SceneIma
       return attemptsByKey.get(idempotencyKey) ?? null;
     },
 
-    async findAttemptByTask(taskId: string): Promise<ImageGenerationAttempt | null> {
-      return [...attemptsByKey.values()].find((attempt) => attempt.taskId === taskId) ?? null;
+    async findManualAttemptByTask(taskId: string): Promise<ImageGenerationAttempt | null> {
+      return [...attemptsByKey.values()].find((attempt) => attempt.taskId === taskId && attempt.trigger === 'manual') ?? null;
     },
 
     async getCandidate(candidateId: string): Promise<SceneCandidate | null> {
@@ -801,7 +822,6 @@ export async function upsertBookVisualProfile(input: ProfileUpsertInput): Promis
 export async function upsertImageGenerationAttempt(input: AttemptUpsertInput): Promise<ImageGenerationAttempt> {
   if (!supabase) return apiMemoryRepository.upsertAttempt(input);
   const client = requireSupabase();
-  const requestedType = validateCanonicalImageTypeForWrite(input.requestedType);
   const existingResult = await client
     .from('image_generation_attempts')
     .select('*')
@@ -810,27 +830,29 @@ export async function upsertImageGenerationAttempt(input: AttemptUpsertInput): P
   if (existingResult.error) throw existingResult.error;
   const existing = existingResult.data ? toAttempt(existingResult.data) : null;
   if (existing && (existing.status !== 'queued' || input.status === 'queued')) return existing;
+  const persistedInput = existing ? preserveQueuedAttemptFields(existing, input) : input;
+  const requestedType = validateCanonicalImageTypeForWrite(persistedInput.requestedType);
   const payload = {
-    id: existing?.id ?? input.id ?? createId('attempt'),
-    idempotency_key: input.idempotencyKey,
-    candidate_id: input.candidateId,
-    task_id: input.taskId,
-    parent_attempt_id: input.parentAttemptId ?? null,
-    trigger: input.trigger,
+    id: existing?.id ?? persistedInput.id ?? createId('attempt'),
+    idempotency_key: persistedInput.idempotencyKey,
+    candidate_id: persistedInput.candidateId,
+    task_id: persistedInput.taskId,
+    parent_attempt_id: persistedInput.parentAttemptId ?? null,
+    trigger: persistedInput.trigger,
     requested_type: requestedType,
-    overridden_from: input.overriddenFrom ?? null,
-    status: input.status,
-    prompt: input.prompt,
-    provider: input.provider ?? null,
-    model: input.model ?? null,
-    width: input.width ?? null,
-    height: input.height ?? null,
-    image_url: input.imageUrl ?? null,
-    audit: input.audit ?? null,
-    classification_snapshot: input.classificationSnapshot ?? null,
-    contract_version: input.contractVersion ?? null,
-    profile_version: input.profileVersion ?? null,
-    artifact_metadata: input.artifactMetadata ?? null,
+    overridden_from: persistedInput.overriddenFrom ?? null,
+    status: persistedInput.status,
+    prompt: persistedInput.prompt,
+    provider: persistedInput.provider ?? null,
+    model: persistedInput.model ?? null,
+    width: persistedInput.width ?? null,
+    height: persistedInput.height ?? null,
+    image_url: persistedInput.imageUrl ?? null,
+    audit: persistedInput.audit ?? null,
+    classification_snapshot: persistedInput.classificationSnapshot ?? null,
+    contract_version: persistedInput.contractVersion ?? null,
+    profile_version: persistedInput.profileVersion ?? null,
+    artifact_metadata: persistedInput.artifactMetadata ?? null,
   };
   const inserted = existing
     ? await client.from('image_generation_attempts').update(payload as never).eq('id', existing.id).select('*').single()
@@ -886,9 +908,16 @@ export async function findImageGenerationAttemptByKey(idempotencyKey: string): P
   return data ? toAttempt(data) : null;
 }
 
-export async function findImageGenerationAttemptByTask(taskId: string): Promise<ImageGenerationAttempt | null> {
-  if (!supabase) return apiMemoryRepository.findAttemptByTask(taskId);
-  const { data, error } = await supabase.from('image_generation_attempts').select('*').eq('task_id', taskId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+export async function findManualImageGenerationAttemptByTask(taskId: string): Promise<ImageGenerationAttempt | null> {
+  if (!supabase) return apiMemoryRepository.findManualAttemptByTask(taskId);
+  const { data, error } = await supabase
+    .from('image_generation_attempts')
+    .select('*')
+    .eq('task_id', taskId)
+    .eq('trigger', 'manual')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
   if (error) throw error;
   return data ? toAttempt(data) : null;
 }
