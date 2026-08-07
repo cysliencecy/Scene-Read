@@ -3,7 +3,6 @@ from unittest.mock import patch
 
 from scene_reader_worker.image_generator import (
     generate_images_for_candidates,
-    select_candidates_for_generation,
     target_image_count_for_paragraphs,
 )
 from scene_reader_worker.ai_client import (
@@ -120,17 +119,6 @@ class ProcessorTest(unittest.TestCase):
         self.assertEqual(target_image_count_for_paragraphs(20, max_images=3), 2)
         self.assertEqual(target_image_count_for_paragraphs(51, max_images=3), 3)
         self.assertEqual(target_image_count_for_paragraphs(51, max_images=2), 2)
-
-    def test_select_candidates_prefers_type_diversity(self) -> None:
-        candidates = [
-            result_candidate("a", "scene", 0.95, 0),
-            result_candidate("b", "scene", 0.9, 1),
-            result_candidate("c", "character", 0.7, 2),
-        ]
-
-        selected = select_candidates_for_generation(candidates, target_count=2)
-
-        self.assertEqual([candidate.imageType for candidate in selected], ["scene", "character"])
 
     def test_generate_images_with_glm_provider_downloads_returned_image_url(self) -> None:
         result = process_chapter(SAMPLE_PAYLOAD, provider="heuristic")

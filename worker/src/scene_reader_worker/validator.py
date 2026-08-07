@@ -2,10 +2,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from .types import ChapterPayload, ImageType, SceneCandidate, WorkerLog
+from .prompt import CLASSIFICATION_PROMPT_VERSION
+from .types import (
+    CandidateClassification,
+    CandidateSeed,
+    ChapterPayload,
+    ImageType,
+    RankedImageType,
+    SceneCandidate,
+    VisualEvidence,
+    VisualProfileFact,
+    WorkerLog,
+)
 
 
 VALID_IMAGE_TYPES: set[ImageType] = {"scene", "character", "object"}
+CLASSIFICATION_CONFIDENCE_THRESHOLD = 0.65
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -20,6 +32,136 @@ def _as_image_type(value: Any) -> ImageType:
     if value in VALID_IMAGE_TYPES:
         return value
     return "scene"
+
+
+def _required_text(value: Any, field: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"Classification requires {field}.")
+    return text
+
+
+def _normalized_confidence(value: Any) -> float:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Classification confidence must be numeric.") from error
+    if not 0.0 <= confidence <= 1.0:
+        raise ValueError("Classification confidence must be between 0 and 1.")
+    return confidence
+
+
+def _validate_evidence(value: Any) -> tuple[VisualEvidence, ...]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("Classification requires non-empty evidence.")
+    evidence = tuple(
+        VisualEvidence(
+            sourceBlockId=_required_text(item.get("sourceBlockId") if isinstance(item, dict) else None, "evidence.sourceBlockId"),
+            sourceText=_required_text(item.get("sourceText") if isinstance(item, dict) else None, "evidence.sourceText"),
+        )
+        for item in value
+    )
+    return evidence
+
+
+def _validate_profile_suggestions(value: Any) -> tuple[VisualProfileFact, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError("profileFactSuggestions must be a list.")
+    facts: list[VisualProfileFact] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("profileFactSuggestions must contain objects.")
+        facts.append(
+            VisualProfileFact(
+                field=_required_text(item.get("field"), "profileFactSuggestions.field"),
+                value=_required_text(item.get("value"), "profileFactSuggestions.value"),
+                sourceBlockId=str(item.get("sourceBlockId") or "").strip(),
+                sourceText=str(item.get("sourceText") or "").strip(),
+                stability=item.get("stability", "inferred"),
+            )
+        )
+    return tuple(facts)
+
+
+def validate_candidate_classification(
+    raw: Any,
+    *,
+    model: str = "kimi-k3",
+    prompt_version: str = CLASSIFICATION_PROMPT_VERSION,
+) -> CandidateClassification:
+    if not isinstance(raw, dict):
+        raise ValueError("Classification response must be an object.")
+    raw_ranked = raw.get("rankedTypes")
+    if not isinstance(raw_ranked, list) or len(raw_ranked) != 3:
+        raise ValueError("Classification rankedTypes must contain exactly three entries.")
+    ranked_types = tuple(
+        RankedImageType(
+            imageType=_required_text(item.get("imageType") if isinstance(item, dict) else None, "rankedTypes.imageType"),
+            confidence=_normalized_confidence(item.get("confidence") if isinstance(item, dict) else None),
+        )
+        for item in raw_ranked
+    )
+    if len({item.imageType for item in ranked_types}) != 3:
+        raise ValueError("Classification rankedTypes must be unique.")
+    if any(ranked_types[index].confidence < ranked_types[index + 1].confidence for index in range(2)):
+        raise ValueError("Classification rankedTypes must be sorted by descending confidence.")
+    primary_type = _required_text(raw.get("primaryType"), "primaryType")
+    if primary_type != ranked_types[0].imageType:
+        raise ValueError("Classification primaryType must equal the highest-ranked type.")
+    tags = raw.get("auxiliaryTags", [])
+    if not isinstance(tags, list) or any(not isinstance(tag, str) or not tag.strip() for tag in tags):
+        raise ValueError("Classification auxiliaryTags must be a list of non-empty strings.")
+    return CandidateClassification(
+        primaryType=primary_type,
+        rankedTypes=ranked_types,
+        evidence=_validate_evidence(raw.get("evidence")),
+        reason=_required_text(raw.get("reason"), "reason"),
+        auxiliaryTags=tuple(tag.strip() for tag in tags),
+        profileFactSuggestions=_validate_profile_suggestions(raw.get("profileFactSuggestions")),
+        status="eligible" if ranked_types[0].confidence >= CLASSIFICATION_CONFIDENCE_THRESHOLD else "below_threshold",
+        model=model,
+        promptVersion=prompt_version,
+    )
+
+
+def validate_discovery_candidates(
+    payload: ChapterPayload, raw_candidates: Any
+) -> tuple[list[CandidateSeed], list[WorkerLog]]:
+    if not isinstance(raw_candidates, list):
+        return [], [WorkerLog(level="warning", message="AI discovery candidates is not a list.")]
+    paragraph_positions = {
+        block["id"]: position for position, block in enumerate(payload["blocks"]) if block.get("type") == "paragraph"
+    }
+    seeds: list[CandidateSeed] = []
+    seen_ids: set[str] = set()
+    logs: list[WorkerLog] = []
+    for item in raw_candidates[:8]:
+        if not isinstance(item, dict):
+            logs.append(WorkerLog(level="warning", message="Skipped non-object discovery candidate."))
+            continue
+        source_block_id = str(item.get("sourceBlockId") or "").strip()
+        if source_block_id not in paragraph_positions or source_block_id in seen_ids:
+            logs.append(WorkerLog(level="warning", message="Skipped discovery candidate with invalid sourceBlockId.", data={"sourceBlockId": source_block_id}))
+            continue
+        try:
+            seeds.append(
+                CandidateSeed(
+                    id=str(item.get("id") or f"{payload['chapterId']}-seed-{len(seeds) + 1}"),
+                    chapterId=payload["chapterId"],
+                    sourceBlockId=source_block_id,
+                    position=paragraph_positions[source_block_id],
+                    readingValue=_normalized_confidence(item.get("readingValue")),
+                    reason=_required_text(item.get("reason"), "reason"),
+                    evidence=_validate_evidence(item.get("evidence")),
+                )
+            )
+            seen_ids.add(source_block_id)
+        except ValueError as error:
+            logs.append(WorkerLog(level="warning", message="Skipped invalid discovery candidate.", data={"error": str(error)}))
+    logs.append(WorkerLog(level="info", message="Validated candidate discoveries.", data={"count": len(seeds)}))
+    return seeds, logs
 
 
 def validate_ai_candidates(payload: ChapterPayload, raw_candidates: Any) -> tuple[list[SceneCandidate], list[WorkerLog]]:
