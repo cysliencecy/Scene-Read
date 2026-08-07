@@ -147,6 +147,34 @@ class LiveProviderBoundaryTest(unittest.TestCase):
             ("pollinations", "pollinations", 900, 600),
         )
 
+    def test_glm_rejects_decoded_non_three_two_output_after_posting_once(self) -> None:
+        generation_posts = []
+
+        def urlopen(request, timeout=0):
+            url = request.full_url if hasattr(request, "full_url") else request
+            if url == DEFAULT_GLM_IMAGE_ENDPOINT:
+                generation_posts.append(request)
+                return FakeResponse(
+                    b'{"data":[{"url":"https://images.example/square.svg"}]}'
+                )
+            if url == "https://images.example/square.svg":
+                return FakeResponse(svg_bytes(640, 640), "image/svg+xml")
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        with patch.dict(
+            "os.environ",
+            {"GLM_API_KEY": "test-key", "GLM_IMAGE_MODEL": "glm-image-test"},
+            clear=True,
+        ), patch(
+            "scene_reader_worker.image_generator.urllib.request.urlopen",
+            side_effect=urlopen,
+        ):
+            with self.assertRaisesRegex(ValueError, "formal images must have a 3:2"):
+                generate_formal_image(formal_request(), "glm")
+
+        self.assertEqual(len(generation_posts), 1)
+        self.assertEqual(generation_posts[0].get_method(), "POST")
+
     def test_live_providers_fail_when_actual_dimensions_are_invalid_or_not_three_two(self) -> None:
         for body, mime_type in (
             (b"not an image", "image/png"),
@@ -380,6 +408,40 @@ class GenerationAttemptTest(unittest.TestCase):
             self.assertEqual(calls, {"generation": 1, "audit": 1})
             self.assertEqual(result.status, expected_status)
             self.assertEqual(result.artifact.imageBase64, "kept-image")
+
+    def test_severe_fact_conflict_alone_blocks_once_and_retains_artifact(self) -> None:
+        calls = {"generation": 0, "audit": 0}
+
+        def generate(request):
+            calls["generation"] += 1
+            return GeneratedImageArtifact(
+                "fact-conflict-image", "image/png", "glm", "glm-image", 900, 600
+            )
+
+        def audit(artifact, request):
+            calls["audit"] += 1
+            return {
+                "rules": [
+                    {
+                        "rule": "environment composition",
+                        "passed": True,
+                        "severity": "info",
+                        "explanation": "Composition is compliant.",
+                    }
+                ],
+                "severeFactConflict": True,
+                "provider": "vision",
+                "model": "vision-v2",
+                "auditVersion": "audit-v3",
+            }
+
+        result = run_generation_attempt(
+            formal_request(), provider="glm", generate=generate, audit=audit
+        )
+
+        self.assertEqual(calls, {"generation": 1, "audit": 1})
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.artifact.imageBase64, "fact-conflict-image")
 
     def test_generation_and_audit_failures_never_retry(self) -> None:
         calls = {"generation": 0, "audit": 0}
