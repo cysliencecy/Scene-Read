@@ -10,6 +10,7 @@ import { ReaderParagraph } from '../components/ReaderParagraph';
 import { SceneImage } from '../components/SceneImage';
 import { colors } from '../theme/colors';
 import type { Chapter, GenerationTask, SceneImage as SceneImageData, VisualStyle } from '../types/app';
+import { filterPublishableReaderImages } from './sceneDebugModel';
 
 const readerThemeTokens: Record<
   ReaderTheme,
@@ -84,7 +85,7 @@ export function ReaderScreen({
     [themeTokens.background],
   );
   const chapterSceneImages = useMemo(
-    () => sceneImages.filter((image) => image.chapterId === chapter.id),
+    () => filterPublishableReaderImages(sceneImages).filter((image) => image.chapterId === chapter.id),
     [chapter.id, sceneImages],
   );
   const chapterGenerationTasks = useMemo(
@@ -143,7 +144,7 @@ export function ReaderScreen({
             );
           }
 
-          const image = sceneImages.find((item) => item.id === block.imageId);
+          const image = chapterSceneImages.find((item) => item.id === block.imageId);
           if (!image) return null;
           return (
             <SceneImage

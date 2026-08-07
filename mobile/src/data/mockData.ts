@@ -1,4 +1,4 @@
-import type { Book, Chapter, GenerationTask, SceneImage, StyleOption } from '../types/app';
+import type { Book, Chapter, GenerationTask, SceneCandidateDebugDetail, SceneImage, StyleOption } from '../types/app';
 
 export const books: Book[] = [
   {
@@ -183,6 +183,107 @@ export const sceneImages: SceneImage[] = [
     variant: 'office',
     prompt: '旧街书店室内，雨夜木门，旧书箱，温暖灯光',
     imageUrl: 'https://images.unsplash.com/photo-1524995997946-a1c2e315a42f?auto=format&fit=crop&w=900&q=80',
+  },
+];
+
+const classificationBase = {
+  evidence: [{ sourceBlockId: 'rain-p4', sourceText: 'The wet street reflected the convenience-store sign.' }],
+  reason: 'The setting anchors the next movement in the chapter.',
+  auxiliaryTags: ['rain', 'night'],
+  model: 'kimi-k3',
+  promptVersion: 'classification-v2',
+};
+
+export const sceneCandidateDebugDetails: SceneCandidateDebugDetail[] = [
+  {
+    id: 'mock-candidate-eligible', taskId: 'rain-task-1', bookId: 'rain', chapterId: 'rain-chapter-1',
+    order: 0, sourceBlockId: 'rain-p4', position: 3, reason: classificationBase.reason,
+    sourceText: classificationBase.evidence[0].sourceText, promptDraft: 'A rainy street in landscape 3:2.',
+    confidence: 0.86, imageType: 'environment', storedImageType: 'environment', effectiveImageType: 'environment',
+    classification: {
+      ...classificationBase, primaryType: 'environment', status: 'eligible',
+      rankedTypes: [
+        { imageType: 'environment', confidence: 0.86 },
+        { imageType: 'atmosphere', confidence: 0.71 },
+        { imageType: 'object', confidence: 0.22 },
+      ],
+    },
+    contractVersion: 'composition-v1', profileVersion: 'profile-v3',
+    attempts: [{
+      id: 'mock-attempt-eligible', idempotencyKey: 'mock-auto-1', candidateId: 'mock-candidate-eligible',
+      taskId: 'rain-task-1', trigger: 'automatic', requestedType: 'environment', status: 'publishable',
+      prompt: 'A rainy street in landscape 3:2.', provider: 'glm', model: 'glm-image-1', width: 1536, height: 1024,
+      imageUrl: sceneImages[0].imageUrl, createdAt: '2026-08-07T09:00:00.000Z',
+      audit: { verdict: 'publishable', rules: [], severeFactConflict: false, provider: 'vision', model: 'vision-v1', auditVersion: 'audit-v1' },
+    }],
+  },
+  {
+    id: 'mock-candidate-below', taskId: 'rain-task-1', bookId: 'rain', chapterId: 'rain-chapter-1',
+    order: 1, sourceBlockId: 'rain-p2', position: 1, reason: 'The moment could be a portrait or atmosphere image.',
+    sourceText: 'She stood in the entrance while the room stayed quiet.', promptDraft: 'Quiet apartment entrance.',
+    confidence: 0.61, imageType: 'portrait', storedImageType: 'portrait', effectiveImageType: 'portrait',
+    classification: {
+      ...classificationBase, primaryType: 'portrait', status: 'below_threshold', reason: 'The moment could be a portrait or atmosphere image.',
+      rankedTypes: [
+        { imageType: 'portrait', confidence: 0.61 },
+        { imageType: 'atmosphere', confidence: 0.58 },
+        { imageType: 'environment', confidence: 0.43 },
+      ],
+    },
+    contractVersion: 'composition-v1', profileVersion: 'profile-v3', attempts: [],
+  },
+  {
+    id: 'mock-candidate-blocked', taskId: 'rain-task-1', bookId: 'rain', chapterId: 'rain-chapter-1',
+    order: 2, sourceBlockId: 'rain-p6', position: 5, reason: 'The meeting is an interaction.',
+    sourceText: 'Several people were already seated in the meeting room.', promptDraft: 'Office meeting interaction.',
+    confidence: 0.79, imageType: 'interaction', storedImageType: 'interaction', effectiveImageType: 'interaction',
+    classification: {
+      ...classificationBase, primaryType: 'interaction', status: 'eligible', reason: 'The meeting is an interaction.',
+      rankedTypes: [
+        { imageType: 'interaction', confidence: 0.79 },
+        { imageType: 'environment', confidence: 0.44 },
+        { imageType: 'portrait', confidence: 0.31 },
+      ],
+    },
+    contractVersion: 'composition-v1', profileVersion: 'profile-v3',
+    attempts: [{
+      id: 'mock-attempt-blocked', idempotencyKey: 'mock-auto-2', candidateId: 'mock-candidate-blocked',
+      taskId: 'rain-task-1', trigger: 'automatic', requestedType: 'interaction', status: 'blocked',
+      prompt: 'Office meeting interaction.', provider: 'glm', model: 'glm-image-1', width: 1536, height: 1024,
+      imageUrl: sceneImages[1].imageUrl, createdAt: '2026-08-07T09:10:00.000Z',
+      audit: {
+        verdict: 'blocked', severeFactConflict: true, provider: 'vision', model: 'vision-v1', auditVersion: 'audit-v1',
+        rules: [{ rule: 'stable-facts', passed: false, severity: 'severe', explanation: 'A stable character fact conflicts with the image.' }],
+      },
+    }],
+  },
+  {
+    id: 'mock-candidate-manual', taskId: 'rain-task-1', bookId: 'rain', chapterId: 'rain-chapter-1',
+    order: 3, sourceBlockId: 'rain-p1', position: 0, reason: 'The phone is the visual focus.',
+    sourceText: 'The unsent message remained on the phone screen.', promptDraft: 'Close view of the phone.',
+    confidence: 0.74, imageType: 'object', storedImageType: 'object', effectiveImageType: 'object',
+    classification: {
+      ...classificationBase, primaryType: 'object', status: 'eligible', reason: 'The phone is the visual focus.',
+      rankedTypes: [
+        { imageType: 'object', confidence: 0.74 },
+        { imageType: 'portrait', confidence: 0.51 },
+        { imageType: 'atmosphere', confidence: 0.35 },
+      ],
+    },
+    contractVersion: 'composition-v1', profileVersion: 'profile-v3',
+    attempts: [
+      {
+        id: 'mock-attempt-original', idempotencyKey: 'mock-auto-3', candidateId: 'mock-candidate-manual',
+        taskId: 'rain-task-1', trigger: 'automatic', requestedType: 'object', status: 'publishable',
+        prompt: 'Close view of the phone.', imageUrl: sceneImages[0].imageUrl, createdAt: '2026-08-07T08:00:00.000Z',
+      },
+      {
+        id: 'mock-attempt-manual', idempotencyKey: 'mock-manual-1', candidateId: 'mock-candidate-manual',
+        taskId: 'rain-task-manual', parentAttemptId: 'mock-attempt-original', trigger: 'manual', requestedType: 'atmosphere',
+        overriddenFrom: 'object', status: 'publishable', prompt: 'Rainy room atmosphere around the phone.',
+        imageUrl: sceneImages[1].imageUrl, createdAt: '2026-08-07T10:00:00.000Z',
+      },
+    ],
   },
 ];
 

@@ -28,7 +28,8 @@ export function SceneImage({
 
 const styles = StyleSheet.create({
   sceneImage: {
-    height: 146,
+    width: '100%',
+    aspectRatio: 3 / 2,
     borderRadius: 18,
     overflow: 'hidden',
     borderWidth: 1,

@@ -24,6 +24,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "test:scene-debug": "tsx --test src/screens/sceneDebugModel.test.ts",
     "test:txt-import": "tsx scripts/test-txt-import.ts"
   },
   "private": true

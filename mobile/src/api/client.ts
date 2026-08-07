@@ -1,5 +1,11 @@
 ﻿import type { Book, Chapter, GenerationTask, SceneCandidate, SceneImage } from '../types/app';
 
+import type {
+  CanonicalImageType,
+  ManualRegenerationResult,
+  SceneCandidateDebugDetail,
+} from '../types/app';
+
 const normalizeBaseUrl = (url: string) => url.replace(/\/+$/, '');
 
 const getDefaultApiBaseUrl = () => {
@@ -79,6 +85,24 @@ export async function fetchSceneCandidates(chapterId?: string, taskId?: string) 
   if (taskId) params.set('taskId', taskId);
   const query = params.toString();
   return getJson<SceneCandidate[]>(`/scene-candidates${query ? `?${query}` : ''}`);
+}
+
+export async function fetchSceneCandidateDetails(chapterId?: string, taskId?: string) {
+  const params = new URLSearchParams({ includeAttempts: 'true' });
+  if (chapterId) params.set('chapterId', chapterId);
+  if (taskId) params.set('taskId', taskId);
+  return getJson<SceneCandidateDebugDetail[]>(`/scene-candidates?${params.toString()}`);
+}
+
+export async function requestManualRegeneration(
+  candidateId: string,
+  overrideImageType: CanonicalImageType,
+  idempotencyKey: string,
+) {
+  return postJson<ManualRegenerationResult>(
+    `/scene-candidates/${encodeURIComponent(candidateId)}/regenerations`,
+    { overrideImageType, idempotencyKey },
+  );
 }
 
 export async function createBook(book: Book) {

@@ -9,11 +9,19 @@ import {
   fetchChapter,
   fetchGenerationTasks,
   fetchSceneImages,
-  fetchSceneCandidates,
+  fetchSceneCandidateDetails,
+  requestManualRegeneration,
   retryGenerationTask,
   submitChapterGenerationTask,
 } from './src/api/client';
 import { pickAndParseBook, type ImportedBookDraft } from './src/import/bookImport';
+import {
+  books as mockBooks,
+  chapters as mockChapters,
+  generationTasks as mockGenerationTasks,
+  sceneCandidateDebugDetails as mockSceneCandidates,
+  sceneImages as mockSceneImages,
+} from './src/data/mockData';
 import {
   getRouteTitle,
   initialNavigationState,
@@ -23,12 +31,29 @@ import {
 import { ImportScreen } from './src/screens/ImportScreen';
 import { ReaderScreen } from './src/screens/ReaderScreen';
 import { SceneDebugScreen } from './src/screens/SceneDebugScreen';
+import { filterPublishableReaderImages } from './src/screens/sceneDebugModel';
 import { ShelfScreen } from './src/screens/ShelfScreen';
 import { StyleScreen } from './src/screens/StyleScreen';
 import { colors } from './src/theme/colors';
-import type { Book, Chapter, ChapterBlock, GenerationTask, SceneCandidate, SceneImage, VisualStyle } from './src/types/app';
+import type {
+  Book,
+  CanonicalImageType,
+  Chapter,
+  ChapterBlock,
+  GenerationTask,
+  SceneCandidateDebugDetail,
+  SceneImage,
+  VisualStyle,
+} from './src/types/app';
 
 const POLLING_INTERVAL_MS = 3000;
+
+const withDevelopmentDebugFixtures = (
+  candidates: SceneCandidateDebugDetail[],
+  chapterId: string,
+) => candidates.length > 0 || !__DEV__
+  ? candidates
+  : mockSceneCandidates.filter((candidate) => candidate.chapterId === chapterId);
 
 const isPendingTask = (task: GenerationTask) =>
   task.status === 'queued' || task.status === 'recognizing' || task.status === 'generating';
@@ -53,7 +78,7 @@ const withReaderGeneratedBlocks = (
 ): Chapter | null => {
   if (!chapter) return null;
 
-  const chapterImages = images.filter((image) => image.chapterId === chapter.id);
+  const chapterImages = filterPublishableReaderImages(images).filter((image) => image.chapterId === chapter.id);
   const chapterTasks = tasks.filter((task) => task.chapterId === chapter.id);
   const fallbackBlockId = getFallbackInsertAfterBlockId(chapter.blocks);
   const fallbackImages = chapterImages.filter((image) => !image.sourceBlockId);
@@ -103,7 +128,7 @@ export default function App() {
   const [chaptersById, setChaptersById] = useState<Record<string, Chapter>>({});
   const [generationTasks, setGenerationTasks] = useState<GenerationTask[]>([]);
   const [sceneImages, setSceneImages] = useState<SceneImage[]>([]);
-  const [sceneCandidates, setSceneCandidates] = useState<SceneCandidate[]>([]);
+  const [sceneCandidates, setSceneCandidates] = useState<SceneCandidateDebugDetail[]>([]);
   const [apiStatus, setApiStatus] = useState<'loading' | 'connected' | 'fallback'>('loading');
   const [pendingImportDraft, setPendingImportDraft] = useState<ImportedBookDraft | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -146,10 +171,11 @@ export default function App() {
         setApiStatus('connected');
       } catch {
         if (cancelled) return;
-        setShelfBooks([]);
-        setGenerationTasks([]);
-        setSceneImages([]);
-        setSceneCandidates([]);
+        setShelfBooks(mockBooks);
+        setChaptersById(Object.fromEntries(mockChapters.map((chapter) => [chapter.id, chapter])));
+        setGenerationTasks(mockGenerationTasks);
+        setSceneImages(mockSceneImages);
+        setSceneCandidates(mockSceneCandidates);
         setApiStatus('fallback');
       }
     }
@@ -196,12 +222,12 @@ export default function App() {
         const [apiTasks, apiImages, apiCandidates] = await Promise.all([
           fetchGenerationTasks(),
           fetchSceneImages(),
-          fetchSceneCandidates(currentChapter.id),
+          fetchSceneCandidateDetails(currentChapter.id),
         ]);
         if (cancelled) return;
         setGenerationTasks(apiTasks);
         setSceneImages(apiImages);
-        setSceneCandidates(apiCandidates);
+        setSceneCandidates(withDevelopmentDebugFixtures(apiCandidates, currentChapter.id));
         setApiStatus('connected');
       } catch {
         if (cancelled) return;
@@ -362,6 +388,24 @@ export default function App() {
       );
       setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
     }
+  };
+
+  const confirmManualRegeneration = async (
+    candidateId: string,
+    overrideImageType: CanonicalImageType,
+    idempotencyKey: string,
+  ) => {
+    await requestManualRegeneration(candidateId, overrideImageType, idempotencyKey);
+    if (!currentChapter) return;
+    const [apiTasks, apiImages, apiCandidates] = await Promise.all([
+      fetchGenerationTasks(),
+      fetchSceneImages(),
+      fetchSceneCandidateDetails(currentChapter.id),
+    ]);
+    setGenerationTasks(apiTasks);
+    setSceneImages(apiImages);
+    setSceneCandidates(withDevelopmentDebugFixtures(apiCandidates, currentChapter.id));
+    setApiStatus('connected');
   };
 
   const beginFileImport = async () => {
@@ -531,7 +575,12 @@ export default function App() {
           ))}
 
         {route.name === 'SceneDebug' && (
-          <SceneDebugScreen chapter={currentChapter} candidates={sceneCandidates} sceneImages={sceneImages} />
+          <SceneDebugScreen
+            chapter={currentChapter}
+            candidates={sceneCandidates}
+            sceneImages={sceneImages}
+            onConfirmRegeneration={confirmManualRegeneration}
+          />
         )}
         {apiStatus === 'fallback' && (
           <View style={styles.apiBadge}>
