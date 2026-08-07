@@ -73,13 +73,16 @@ def _validate_profile_suggestions(value: Any) -> tuple[VisualProfileFact, ...]:
     for item in value:
         if not isinstance(item, dict):
             raise ValueError("profileFactSuggestions must contain objects.")
+        stability = item.get("stability", "inferred")
+        if stability not in ("stable", "inferred"):
+            raise ValueError("profileFactSuggestions.stability must be 'stable' or 'inferred'.")
         facts.append(
             VisualProfileFact(
                 field=_required_text(item.get("field"), "profileFactSuggestions.field"),
                 value=_required_text(item.get("value"), "profileFactSuggestions.value"),
                 sourceBlockId=str(item.get("sourceBlockId") or "").strip(),
                 sourceText=str(item.get("sourceText") or "").strip(),
-                stability=item.get("stability", "inferred"),
+                stability=stability,
             )
         )
     return tuple(facts)

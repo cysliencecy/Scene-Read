@@ -48,6 +48,8 @@ def require_canonical_image_type(value: str) -> CanonicalImageType:
 def validate_profile_fact(fact: VisualProfileFact) -> VisualProfileFact:
     if not fact.field.strip() or not fact.value.strip():
         raise ValueError("Profile facts require a non-empty field and value.")
+    if fact.stability not in ("stable", "inferred"):
+        raise ValueError("Profile fact stability must be either 'stable' or 'inferred'.")
     if fact.stability == "stable" and (not fact.sourceBlockId.strip() or not fact.sourceText.strip()):
         raise ValueError("Stable profile facts require sourceBlockId and sourceText evidence.")
     return fact

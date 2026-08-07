@@ -122,7 +122,7 @@ def main() -> int:
         processed = process_chapter(payload, provider=args.provider)
         result = result_to_dict(processed)
 
-        if args.generate_images:
+        if args.generate_images and processed.provider != "heuristic":
             target_images = target_image_count_for_paragraphs(len(payload["blocks"]), max_images=args.max_images)
             if args.task_id:
                 _patch_task(
@@ -137,6 +137,8 @@ def main() -> int:
                 target_images=target_images,
             )
             result["generatedImages"] = [asdict(image) for image in generated_images]
+        elif args.generate_images:
+            result["generationSkipped"] = "heuristic classifications are debug-only and cannot generate formal images"
 
         if args.output:
             _write_json(Path(args.output), result)

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from scene_reader_worker.processor import (
     ClassifiedCandidate,
@@ -149,6 +150,24 @@ class ClassificationPipelineTest(unittest.TestCase):
         self.assertEqual(validate_candidate_classification(raw_classification((0.649, 0.5, 0.4))).status, "below_threshold")
         self.assertEqual(validate_candidate_classification(raw_classification((0.65, 0.5, 0.4))).status, "eligible")
         self.assertEqual(validate_candidate_classification(raw_classification((0.651, 0.5, 0.4))).status, "eligible")
+
+    def test_profile_suggestions_reject_every_non_domain_stability_before_classification_construction(self) -> None:
+        for stability in ("", "unknown", "stable-ish", None, 1):
+            invalid = raw_classification() | {
+                "profileFactSuggestions": [
+                    {
+                        "field": "coat",
+                        "value": "dark wool",
+                        "sourceBlockId": "p3",
+                        "sourceText": "Visible evidence.",
+                        "stability": stability,
+                    }
+                ]
+            }
+            with patch("scene_reader_worker.validator.CandidateClassification") as constructor:
+                with self.assertRaises(ValueError):
+                    validate_candidate_classification(invalid)
+                constructor.assert_not_called()
 
     def test_ordering_uses_reading_value_then_quality_and_diversity_only_for_complete_ties(self) -> None:
         high_value = classified(seed("p1", 1, 0.95), "environment", 0.7)
