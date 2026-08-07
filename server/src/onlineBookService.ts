@@ -1,10 +1,15 @@
 import {
+  createGutendexProvider,
   downloadGutendexBookContent,
   downloadGutendexCover,
   getGutendexBook,
-  OnlineBookError,
-  searchGutendex,
 } from './gutendex.js';
+import {
+  normalizeOnlineBookProviderError,
+  OnlineBookError,
+  OnlineBookProviderRegistry,
+} from './onlineBookProvider.js';
+import type { OnlineBookProvider } from './onlineBookProvider.js';
 import { parseOnlineEpub, parseOnlineText } from './onlineBookParser.js';
 import {
   findBookBySource,
@@ -15,18 +20,57 @@ import {
   uploadBookCover,
 } from './repository.js';
 import { isSupabaseConfigured } from './supabaseClient.js';
-import type { Book, Chapter, OnlineBookImportResult, VisualStyle } from './types.js';
+import type { Book, Chapter, OnlineBookImportResult, OnlineBookSearchPage, VisualStyle } from './types.js';
+
+const sourcePriority = { wikisource: 0, gutenberg: 1 } as const;
+
+export async function aggregateOnlineBookSearch(
+  providers: OnlineBookProvider[],
+  query: string,
+  page: number,
+): Promise<OnlineBookSearchPage> {
+  const settled = await Promise.allSettled(providers.map((provider) => provider.search(query, page)));
+  const successful = settled.flatMap((result, index) => result.status === 'fulfilled'
+    ? [{ provider: providers[index], page: result.value }]
+    : []);
+
+  if (successful.length === 0) {
+    throw new OnlineBookError('BOOK_SOURCE_UNAVAILABLE', 502);
+  }
+
+  successful.sort((left, right) => sourcePriority[left.provider.source] - sourcePriority[right.provider.source]);
+  const sourceErrors = settled.flatMap((result, index) => result.status === 'rejected'
+    ? [normalizeOnlineBookProviderError(providers[index].source, result.reason)]
+    : []);
+
+  return {
+    items: successful.flatMap((result) => result.page.items),
+    page,
+    total: successful.reduce((total, result) => total + result.page.total, 0),
+    hasNextPage: successful.some((result) => result.page.hasNextPage),
+    sourceErrors,
+  };
+}
+
+export const onlineBookProviderRegistry = new OnlineBookProviderRegistry();
 
 export async function searchOnlineBooks(query: string, page: number) {
-  const result = await searchGutendex(query, page);
+  const result = await aggregateOnlineBookSearch(onlineBookProviderRegistry.list(), query, page);
   try {
-    const importedIds = await findImportedBookIds(
-      'gutenberg',
-      result.items.map((item) => item.sourceBookId),
-    );
+    const sources = [...new Set(result.items.map((item) => item.source))];
+    const importedIdsBySource = new Map(await Promise.all(sources.map(async (source) => [
+      source,
+      await findImportedBookIds(
+        source,
+        result.items.filter((item) => item.source === source).map((item) => item.sourceBookId),
+      ),
+    ] as const)));
     return {
       ...result,
-      items: result.items.map((item) => ({ ...item, importedBookId: importedIds.get(item.sourceBookId) })),
+      items: result.items.map((item) => ({
+        ...item,
+        importedBookId: importedIdsBySource.get(item.source)?.get(item.sourceBookId),
+      })),
     };
   } catch {
     return result;
@@ -122,3 +166,5 @@ export async function importGutendexBook(
     throw error;
   }
 }
+
+onlineBookProviderRegistry.register(createGutendexProvider(importGutendexBook));

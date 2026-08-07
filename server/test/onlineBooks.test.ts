@@ -60,6 +60,7 @@ test('search uses provider pagination and preserves provider order', async () =>
     assert.deepEqual(result.items.map((book) => book.sourceBookId), ['2', '1']);
     assert.equal(result.total, 40);
     assert.equal(result.hasNextPage, true);
+    assert.deepEqual(result.sourceErrors, []);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalBaseUrl === undefined) delete process.env.GUTENDEX_BASE_URL;
