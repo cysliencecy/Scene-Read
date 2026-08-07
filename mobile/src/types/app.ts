@@ -2,6 +2,8 @@
 
 export type VisualStyle = '写实' | '动漫' | '插画';
 
+export type BookCopyrightStatus = 'public_domain' | 'authorized' | 'unknown';
+
 export type Book = {
   id: string;
   title: string;
@@ -10,6 +12,40 @@ export type Book = {
   currentChapterId: string;
   lastReadLabel: string;
   visualStyle?: VisualStyle;
+  authors?: string[];
+  languages?: string[];
+  coverUrl?: string;
+  source?: 'gutenberg';
+  sourceBookId?: string;
+  sourceUrl?: string;
+  copyrightStatus?: BookCopyrightStatus;
+};
+
+export type OnlineBook = {
+  source: 'gutenberg';
+  sourceBookId: string;
+  title: string;
+  authors: string[];
+  languages: string[];
+  coverUrl?: string;
+  sourceUrl: string;
+  copyrightStatus: BookCopyrightStatus;
+  downloadCount: number;
+  canImport: boolean;
+  importedBookId?: string;
+};
+
+export type OnlineBookSearchPage = {
+  items: OnlineBook[];
+  page: number;
+  total: number;
+  hasNextPage: boolean;
+};
+
+export type OnlineBookImportResult = {
+  book: Book;
+  chapters: Chapter[];
+  alreadyImported: boolean;
 };
 
 export type StyleOption = {

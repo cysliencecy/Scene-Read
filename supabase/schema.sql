@@ -8,6 +8,13 @@ create table if not exists public.books (
   current_chapter_id text not null,
   last_read_label text not null default '准备开始第一章',
   visual_style text check (visual_style in ('写实', '动漫', '插画')),
+  authors text[] not null default '{}',
+  languages text[] not null default '{}',
+  cover_path text,
+  source text,
+  source_book_id text,
+  source_url text,
+  copyright_status text check (copyright_status in ('public_domain', 'authorized', 'unknown')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -20,6 +27,19 @@ where visual_style is not null
 alter table public.books drop constraint if exists books_visual_style_check;
 alter table public.books
   add constraint books_visual_style_check check (visual_style in ('写实', '动漫', '插画'));
+alter table public.books add column if not exists authors text[] not null default '{}';
+alter table public.books add column if not exists languages text[] not null default '{}';
+alter table public.books add column if not exists cover_path text;
+alter table public.books add column if not exists source text;
+alter table public.books add column if not exists source_book_id text;
+alter table public.books add column if not exists source_url text;
+alter table public.books add column if not exists copyright_status text;
+alter table public.books drop constraint if exists books_copyright_status_check;
+alter table public.books
+  add constraint books_copyright_status_check check (copyright_status in ('public_domain', 'authorized', 'unknown'));
+create unique index if not exists books_source_source_book_id_key
+  on public.books(source, source_book_id)
+  where source is not null and source_book_id is not null;
 
 create table if not exists public.chapters (
   id text primary key default gen_random_uuid()::text,
@@ -30,6 +50,62 @@ create table if not exists public.chapters (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create or replace function public.import_online_book(
+  p_authors text[],
+  p_book_id text,
+  p_chapters jsonb,
+  p_copyright_status text,
+  p_cover_path text,
+  p_languages text[],
+  p_source text,
+  p_source_book_id text,
+  p_source_url text,
+  p_title text,
+  p_visual_style text
+)
+returns public.books
+language plpgsql
+as $$
+declare
+  imported_book public.books;
+  chapter jsonb;
+begin
+  select * into imported_book
+  from public.books
+  where source = p_source and source_book_id = p_source_book_id;
+
+  if found then
+    return imported_book;
+  end if;
+
+  if jsonb_array_length(p_chapters) = 0 then
+    raise exception 'ONLINE_BOOK_HAS_NO_CHAPTERS';
+  end if;
+
+  insert into public.books (
+    id, title, progress, accent, current_chapter_id, last_read_label, visual_style,
+    authors, languages, cover_path, source, source_book_id, source_url, copyright_status
+  ) values (
+    p_book_id, p_title, '新导入', '#426f76', p_chapters->0->>'id', '准备开始第一章', p_visual_style,
+    p_authors, p_languages, p_cover_path, p_source, p_source_book_id, p_source_url, p_copyright_status
+  ) returning * into imported_book;
+
+  for chapter in select value from jsonb_array_elements(p_chapters)
+  loop
+    insert into public.chapters (id, book_id, title, progress, blocks)
+    values (
+      chapter->>'id',
+      p_book_id,
+      chapter->>'title',
+      coalesce((chapter->>'progress')::integer, 0),
+      coalesce(chapter->'blocks', '[]'::jsonb)
+    );
+  end loop;
+
+  return imported_book;
+end;
+$$;
 
 create table if not exists public.generation_tasks (
   id text primary key default gen_random_uuid()::text,
@@ -80,6 +156,10 @@ alter table public.scene_images
 
 insert into storage.buckets (id, name, public)
 values ('scene-images', 'scene-images', true)
+on conflict (id) do update set public = excluded.public;
+
+insert into storage.buckets (id, name, public)
+values ('book-covers', 'book-covers', true)
 on conflict (id) do update set public = excluded.public;
 
 

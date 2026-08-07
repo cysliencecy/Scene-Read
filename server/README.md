@@ -51,11 +51,14 @@ Copy-Item .env.example .env
 
 Then fill `SUPABASE_URL` and `SUPABASE_SECRET_KEY`. Full setup notes are in `docs/supabase-setup.md`.
 
+Online book search uses Gutendex and Project Gutenberg. `GUTENDEX_BASE_URL` is optional and defaults to `https://gutendex.com`. Run the latest `supabase/schema.sql` before importing an online book; search itself remains available when Supabase is not configured.
+
 ## Validation
 
 ```powershell
 npm run typecheck
 npm run build
+npm test
 ```
 
 ## Endpoints
@@ -65,6 +68,8 @@ npm run build
 - `POST /books`
 - `GET /books/:bookId`
 - `GET /books/:bookId/chapters`
+- `GET /online-books/search?q=...&page=1`
+- `POST /online-books/import`
 - `POST /chapters`
 - `GET /chapters/:chapterId`
 - `GET /generation-tasks`
@@ -86,6 +91,8 @@ Included:
 - optional Supabase data layer for books, chapters, generation tasks, and scene images
 - Supabase Storage upload for generated scene images
 - local automatic Worker execution after chapter generation task submission
+- server-side Project Gutenberg search and full-text import through Gutendex
+- EPUB-first parsing with UTF-8 TXT fallback, source metadata normalization, deduplication, and cover storage
 
 Not included:
 

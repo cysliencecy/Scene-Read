@@ -4,7 +4,7 @@ import {
   generationTasks as mockGenerationTasks,
   sceneImages as mockSceneImages,
 } from './mockData.js';
-import { isSupabaseConfigured, supabase } from './supabaseClient.js';
+import { isSupabaseConfigured, supabase, type Database, type Json } from './supabaseClient.js';
 import type { Book, Chapter, ChapterBlock, GenerationTask, SceneImage, SceneCandidate, VisualStyle } from './types.js';
 
 type BookInput = Partial<Book> & Pick<Book, 'title' | 'currentChapterId'>;
@@ -20,15 +20,14 @@ type SceneCandidateInput = Partial<SceneCandidate> &
 
 const createId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-const toBook = (row: NonNullable<typeof supabase> extends never ? never : {
-  id: string;
-  title: string;
-  progress: string;
-  accent: string;
-  current_chapter_id: string;
-  last_read_label: string;
-  visual_style: string | null;
-}): Book => ({
+type BookRow = Database['public']['Tables']['books']['Row'];
+
+const getPublicStorageUrl = (bucket: string, path: string | null | undefined): string | undefined => {
+  if (!path || !supabase) return undefined;
+  return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+};
+
+const toBook = (row: BookRow): Book => ({
   id: row.id,
   title: row.title,
   progress: row.progress,
@@ -36,6 +35,13 @@ const toBook = (row: NonNullable<typeof supabase> extends never ? never : {
   currentChapterId: row.current_chapter_id,
   lastReadLabel: row.last_read_label,
   visualStyle: row.visual_style === null ? undefined : (row.visual_style as VisualStyle),
+  authors: row.authors,
+  languages: row.languages,
+  coverUrl: getPublicStorageUrl('book-covers', row.cover_path),
+  source: row.source === 'gutenberg' ? row.source : undefined,
+  sourceBookId: row.source_book_id ?? undefined,
+  sourceUrl: row.source_url ?? undefined,
+  copyrightStatus: row.copyright_status ?? undefined,
 });
 
 const toChapter = (row: {
@@ -193,8 +199,19 @@ export async function deleteBook(bookId: string): Promise<boolean> {
     return false;
   }
 
+  const { data: bookRow, error: bookError } = await supabase
+    .from('books')
+    .select('cover_path')
+    .eq('id', bookId)
+    .maybeSingle();
+  if (bookError) throw bookError;
+
   const { error } = await supabase.from('books').delete().eq('id', bookId);
   if (error) throw error;
+  if (bookRow?.cover_path) {
+    const { error: coverError } = await supabase.storage.from('book-covers').remove([bookRow.cover_path]);
+    if (coverError) console.warn(`Failed to remove book cover ${bookRow.cover_path}: ${coverError.message}`);
+  }
   return true;
 }
 
@@ -211,13 +228,88 @@ export async function createBook(input: BookInput): Promise<Book> {
       accent: input.accent ?? '#2f4a40',
       current_chapter_id: input.currentChapterId,
       last_read_label: input.lastReadLabel ?? '准备开始第一章',
-      visual_style: null,
+      visual_style: input.visualStyle ?? null,
+      authors: input.authors ?? [],
+      languages: input.languages ?? [],
+      source: input.source ?? null,
+      source_book_id: input.sourceBookId ?? null,
+      source_url: input.sourceUrl ?? null,
+      copyright_status: input.copyrightStatus ?? null,
     })
     .select('*')
     .single();
 
   if (error) throw error;
   return toBook(data);
+}
+
+export async function findBookBySource(source: string, sourceBookId: string): Promise<Book | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from('books')
+    .select('*')
+    .eq('source', source)
+    .eq('source_book_id', sourceBookId)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? toBook(data) : null;
+}
+
+export async function findImportedBookIds(source: string, sourceBookIds: string[]) {
+  if (!supabase || sourceBookIds.length === 0) return new Map<string, string>();
+  const { data, error } = await supabase
+    .from('books')
+    .select('id, source_book_id')
+    .eq('source', source)
+    .in('source_book_id', sourceBookIds);
+  if (error) throw error;
+  return new Map(data.flatMap((row) => (row.source_book_id ? [[row.source_book_id, row.id] as const] : [])));
+}
+
+export async function uploadBookCover(path: string, bytes: Uint8Array) {
+  const client = requireSupabase();
+  const { error } = await client.storage.from('book-covers').upload(path, bytes, {
+    contentType: 'image/jpeg',
+    upsert: true,
+  });
+  if (error) throw error;
+  return path;
+}
+
+export async function removeBookCover(path: string) {
+  if (!supabase) return;
+  const { error } = await supabase.storage.from('book-covers').remove([path]);
+  if (error) console.warn(`Failed to remove book cover ${path}: ${error.message}`);
+}
+
+export async function importOnlineBook(input: {
+  book: Book;
+  coverPath: string | null;
+  chapters: Chapter[];
+}): Promise<Book> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc('import_online_book', {
+    p_authors: input.book.authors ?? [],
+    p_book_id: input.book.id,
+    p_chapters: input.chapters.map((chapter) => ({
+      id: chapter.id,
+      title: chapter.title,
+      progress: chapter.progress,
+      blocks: chapter.blocks,
+    })) as Json,
+    p_copyright_status: input.book.copyrightStatus ?? 'unknown',
+    p_cover_path: input.coverPath,
+    p_languages: input.book.languages ?? [],
+    p_source: input.book.source ?? 'gutenberg',
+    p_source_book_id: input.book.sourceBookId ?? '',
+    p_source_url: input.book.sourceUrl ?? '',
+    p_title: input.book.title,
+    p_visual_style: input.book.visualStyle ?? '写实',
+  });
+  if (error) throw error;
+  const row = (Array.isArray(data) ? data[0] : data) as BookRow | undefined;
+  if (!row) throw new Error('ONLINE_BOOK_IMPORT_RETURNED_NO_BOOK');
+  return toBook(row);
 }
 
 export async function listChaptersByBook(bookId: string): Promise<Chapter[]> {

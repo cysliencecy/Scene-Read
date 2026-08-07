@@ -3,6 +3,8 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
+
 export type Database = {
   public: {
     Tables: {
@@ -15,6 +17,13 @@ export type Database = {
           current_chapter_id: string;
           last_read_label: string;
           visual_style: string | null;
+          authors: string[];
+          languages: string[];
+          cover_path: string | null;
+          source: string | null;
+          source_book_id: string | null;
+          source_url: string | null;
+          copyright_status: 'public_domain' | 'authorized' | 'unknown' | null;
           created_at: string;
           updated_at: string;
         };
@@ -26,6 +35,13 @@ export type Database = {
           current_chapter_id: string;
           last_read_label?: string;
           visual_style?: string | null;
+          authors?: string[];
+          languages?: string[];
+          cover_path?: string | null;
+          source?: string | null;
+          source_book_id?: string | null;
+          source_url?: string | null;
+          copyright_status?: 'public_domain' | 'authorized' | 'unknown' | null;
         };
         Update: {
           id?: string;
@@ -35,6 +51,13 @@ export type Database = {
           current_chapter_id?: string;
           last_read_label?: string;
           visual_style?: string | null;
+          authors?: string[];
+          languages?: string[];
+          cover_path?: string | null;
+          source?: string | null;
+          source_book_id?: string | null;
+          source_url?: string | null;
+          copyright_status?: 'public_domain' | 'authorized' | 'unknown' | null;
         };
         Relationships: [];
       };
@@ -207,7 +230,24 @@ export type Database = {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      import_online_book: {
+        Args: {
+          p_authors: string[];
+          p_book_id: string;
+          p_chapters: Json;
+          p_copyright_status: 'public_domain' | 'authorized' | 'unknown';
+          p_cover_path: string | null;
+          p_languages: string[];
+          p_source: string;
+          p_source_book_id: string;
+          p_source_url: string;
+          p_title: string;
+          p_visual_style: string;
+        };
+        Returns: Database['public']['Tables']['books']['Row'];
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };
