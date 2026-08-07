@@ -528,58 +528,8 @@ export async function getSceneImage(imageId: string): Promise<SceneImage | null>
 }
 
 export async function createSceneImage(input: SceneImageInput): Promise<SceneImage> {
-  const client = requireSupabase();
-  const id = input.id ?? createId('scene-image');
-  let imagePath = input.imagePath ?? input.imageUrl;
-
-  if (!imagePath && input.imageBase64) {
-    const mimeType = input.mimeType ?? 'image/png';
-    const extension = mimeType.includes('svg') ? 'svg' : mimeType.includes('jpeg') ? 'jpg' : 'png';
-    imagePath = `${input.chapterId}/${id}.${extension}`;
-    const bytes = Buffer.from(input.imageBase64, 'base64');
-    const { error: bucketError } = await client.storage.createBucket('scene-images', { public: true });
-    if (bucketError && !bucketError.message.toLowerCase().includes('already exists')) {
-      throw bucketError;
-    }
-    const { error: uploadError } = await client.storage.from('scene-images').upload(imagePath, bytes, {
-      contentType: mimeType,
-      upsert: true,
-    });
-    if (uploadError) throw uploadError;
-  }
-
-  const payload = {
-    id,
-    chapter_id: input.chapterId,
-    source_block_id: input.sourceBlockId ?? null,
-    position: input.position ?? null,
-    image_type: input.imageType ? validateCanonicalImageTypeForWrite(input.imageType) : 'environment',
-    variant: input.variant ?? 'street',
-    prompt: input.prompt,
-    image_path: imagePath ?? null,
-  };
-  const result = await client
-    .from('scene_images')
-    .upsert(payload)
-    .select('*')
-    .single();
-
-  if (!result.error) return toSceneImage(result.data);
-
-  const legacyResult = await client
-    .from('scene_images')
-    .upsert({
-      id,
-      chapter_id: input.chapterId,
-      variant: input.variant ?? 'street',
-      prompt: input.prompt,
-      image_path: imagePath ?? null,
-    })
-    .select('*')
-    .single();
-
-  if (legacyResult.error) throw legacyResult.error;
-  return toSceneImage(legacyResult.data);
+  void input;
+  throw new Error('READER_PROJECTION_MANAGED_BY_PUBLISHABLE_ATTEMPT');
 }
 
 export async function listSceneCandidates(filters: { chapterId?: string; taskId?: string } = {}): Promise<SceneCandidate[]> {

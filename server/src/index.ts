@@ -8,7 +8,6 @@ import {
   createBook,
   createChapter,
   createGenerationTask,
-  createSceneImage,
   createSceneCandidates,
   dataMode,
   deleteBook,
@@ -369,14 +368,6 @@ app.get('/scene-images', async (_request, response, next) => {
   }
 });
 
-app.post('/scene-images', async (request, response, next) => {
-  try {
-    response.status(201).json({ data: await createSceneImage(request.body) });
-  } catch (error) {
-    next(error);
-  }
-});
-
 app.post('/generation-tasks', async (request, response, next) => {
   try {
     response.status(201).json({ data: await createGenerationTask(request.body) });
@@ -529,14 +520,6 @@ app.post('/worker/scene-candidates', async (request, response, next) => {
 
 app.get('/worker/scene-candidates', (_request, response) => {
   response.json({ data: workerSceneCandidateResults });
-});
-
-app.post('/worker/scene-images', async (request, response, next) => {
-  try {
-    response.status(201).json({ data: await createSceneImage(request.body) });
-  } catch (error) {
-    next(error);
-  }
 });
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {

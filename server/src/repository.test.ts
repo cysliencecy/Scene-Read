@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createInMemoryImageRepository, type PersistedCandidateInput } from './repository.js';
+import { createInMemoryImageRepository, createSceneImage, type PersistedCandidateInput } from './repository.js';
 
 const candidate: PersistedCandidateInput = {
   id: 'candidate-1',
@@ -101,4 +101,16 @@ test('legacy images without an attempt reference remain queryable', async () => 
   assert.equal(images[0]?.id, 'legacy-scene-image');
   assert.equal(images[0]?.attemptId, undefined);
   assert.equal(images[0]?.effectiveImageType, 'environment');
+});
+
+test('new reader projections reject direct scene-image writes without a publishable attempt', async () => {
+  await assert.rejects(
+    createSceneImage({
+      chapterId: 'chapter-1',
+      imageType: 'environment',
+      variant: 'street',
+      prompt: 'Unaudited image',
+    }),
+    /READER_PROJECTION_MANAGED_BY_PUBLISHABLE_ATTEMPT/,
+  );
 });
