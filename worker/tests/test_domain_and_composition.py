@@ -8,6 +8,8 @@ from scene_reader_worker.composition import (
 from scene_reader_worker.types import (
     CANONICAL_IMAGE_TYPES,
     BookVisualProfile,
+    CandidateClassification,
+    RankedImageType,
     VisualEvidence,
     VisualProfileFact,
     require_canonical_image_type,
@@ -25,6 +27,23 @@ class CanonicalTypeAndCompositionTest(unittest.TestCase):
         for legacy_type in ("scene", "character"):
             with self.assertRaises(ValueError):
                 require_canonical_image_type(legacy_type)
+
+    def test_public_classification_dataclasses_reject_legacy_and_arbitrary_types(self) -> None:
+        for invalid_type in ("scene", "character", "imaginary"):
+            with self.assertRaises(ValueError):
+                RankedImageType(imageType=invalid_type, confidence=0.9)
+            with self.assertRaises(ValueError):
+                CandidateClassification(
+                    primaryType=invalid_type,
+                    rankedTypes=(RankedImageType(imageType="environment", confidence=0.9),),
+                    evidence=(),
+                    reason="test",
+                    auxiliaryTags=(),
+                    profileFactSuggestions=(),
+                    status="eligible",
+                    model="test-model",
+                    promptVersion="test-prompt-v1",
+                )
 
     def test_every_canonical_type_has_a_complete_shared_versioned_contract(self) -> None:
         self.assertEqual(tuple(COMPOSITION_CONTRACTS), CANONICAL_IMAGE_TYPES)
@@ -71,14 +90,22 @@ class CanonicalTypeAndCompositionTest(unittest.TestCase):
 
         first_prompt = build_generation_prompt(**prompt_inputs)
         self.assertEqual(first_prompt, build_generation_prompt(**prompt_inputs))
-        self.assertEqual(
-            get_composition_contract("environment"),
-            get_composition_contract("environment"),
-        )
         anime_prompt = build_generation_prompt(**(prompt_inputs | {"style": "anime"}))
-        self.assertIn("contract=environment", first_prompt)
-        self.assertIn("contract=environment", anime_prompt)
-        self.assertNotEqual(first_prompt, anime_prompt)
+        realistic_sections = first_prompt.splitlines()
+        anime_sections = anime_prompt.splitlines()
+        self.assertEqual(len(realistic_sections), len(anime_sections))
+        self.assertEqual(
+            [section for section in realistic_sections if not section.startswith("style=")],
+            [section for section in anime_sections if not section.startswith("style=")],
+        )
+        self.assertEqual(
+            [section for section in realistic_sections if section.startswith("style=")],
+            ["style=realistic"],
+        )
+        self.assertEqual(
+            [section for section in anime_sections if section.startswith("style=")],
+            ["style=anime"],
+        )
 
 
 if __name__ == "__main__":

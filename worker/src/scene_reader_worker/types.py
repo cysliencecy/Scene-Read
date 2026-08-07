@@ -45,6 +45,14 @@ def require_canonical_image_type(value: str) -> CanonicalImageType:
     return cast(CanonicalImageType, value)
 
 
+def validate_profile_fact(fact: VisualProfileFact) -> VisualProfileFact:
+    if not fact.field.strip() or not fact.value.strip():
+        raise ValueError("Profile facts require a non-empty field and value.")
+    if fact.stability == "stable" and (not fact.sourceBlockId.strip() or not fact.sourceText.strip()):
+        raise ValueError("Stable profile facts require sourceBlockId and sourceText evidence.")
+    return fact
+
+
 class ChapterBlock(TypedDict):
     id: str
     type: Literal["paragraph"]
@@ -63,6 +71,9 @@ class ChapterPayload(TypedDict):
 class RankedImageType:
     imageType: CanonicalImageType
     confidence: float
+
+    def __post_init__(self) -> None:
+        require_canonical_image_type(self.imageType)
 
 
 @dataclass(frozen=True)
@@ -90,6 +101,9 @@ class VisualProfileFact:
     sourceText: str
     stability: Literal["stable", "inferred"]
 
+    def __post_init__(self) -> None:
+        validate_profile_fact(self)
+
 
 @dataclass(frozen=True)
 class BookVisualProfile:
@@ -100,6 +114,16 @@ class BookVisualProfile:
     stableFacts: tuple[VisualProfileFact, ...]
     flexibleFacts: tuple[VisualProfileFact, ...]
     version: str = PROFILE_VERSION
+
+    def __post_init__(self) -> None:
+        for fact in self.stableFacts:
+            validate_profile_fact(fact)
+            if fact.stability != "stable":
+                raise ValueError("BookVisualProfile.stableFacts may contain only stable facts.")
+        for fact in self.flexibleFacts:
+            validate_profile_fact(fact)
+            if fact.stability != "inferred":
+                raise ValueError("BookVisualProfile.flexibleFacts may contain only inferred facts.")
 
 
 @dataclass(frozen=True)
@@ -113,6 +137,11 @@ class CandidateClassification:
     status: ClassificationStatus
     model: str
     promptVersion: str
+
+    def __post_init__(self) -> None:
+        require_canonical_image_type(self.primaryType)
+        for ranked_type in self.rankedTypes:
+            require_canonical_image_type(ranked_type.imageType)
 
 
 @dataclass(frozen=True)

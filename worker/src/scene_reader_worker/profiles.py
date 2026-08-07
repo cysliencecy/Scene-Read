@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from .types import PROFILE_VERSION, BookVisualProfile, VisualProfileFact, normalize_tuple
+from .types import (
+    PROFILE_VERSION,
+    BookVisualProfile,
+    VisualProfileFact,
+    normalize_tuple,
+    validate_profile_fact,
+)
 
 
 @dataclass(frozen=True)
@@ -19,14 +25,6 @@ class ProfileMergeResult:
     conflicts: tuple[ProfileFactConflict, ...]
 
 
-def validate_profile_fact(fact: VisualProfileFact) -> VisualProfileFact:
-    if not fact.field.strip() or not fact.value.strip():
-        raise ValueError("Profile facts require a non-empty field and value.")
-    if fact.stability == "stable" and (not fact.sourceBlockId.strip() or not fact.sourceText.strip()):
-        raise ValueError("Stable profile facts require sourceBlockId and sourceText evidence.")
-    return fact
-
-
 def _append_unique(
     facts: tuple[VisualProfileFact, ...], incoming: VisualProfileFact
 ) -> tuple[VisualProfileFact, ...]:
@@ -39,6 +37,10 @@ def merge_profile_facts(
     profile: BookVisualProfile, suggestions: Iterable[VisualProfileFact]
 ) -> ProfileMergeResult:
     """Merge suggestions without replacing an evidence-backed fact on conflict."""
+    for fact in profile.stableFacts:
+        validate_profile_fact(fact)
+    for fact in profile.flexibleFacts:
+        validate_profile_fact(fact)
     stable_facts = normalize_tuple(profile.stableFacts)
     flexible_facts = normalize_tuple(profile.flexibleFacts)
     conflicts: list[ProfileFactConflict] = []
