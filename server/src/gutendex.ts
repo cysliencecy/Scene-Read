@@ -1,4 +1,14 @@
-import type { BookCopyrightStatus, OnlineBook, OnlineBookSearchPage } from './types.js';
+import { OnlineBookError } from './onlineBookProvider.js';
+import type { OnlineBookProvider } from './onlineBookProvider.js';
+import type {
+  BookCopyrightStatus,
+  OnlineBook,
+  OnlineBookImportResult,
+  OnlineBookSearchPage,
+  VisualStyle,
+} from './types.js';
+
+export { OnlineBookError } from './onlineBookProvider.js';
 
 const DEFAULT_GUTENDEX_BASE_URL = 'https://gutendex.com';
 const SEARCH_TIMEOUT_MS = 10_000;
@@ -23,16 +33,6 @@ type GutendexPage = {
   next?: string | null;
   results?: GutendexBook[];
 };
-
-export class OnlineBookError extends Error {
-  constructor(
-    public readonly code: string,
-    public readonly status: number,
-    message = code,
-  ) {
-    super(message);
-  }
-}
 
 const baseUrl = () => (process.env.GUTENDEX_BASE_URL ?? DEFAULT_GUTENDEX_BASE_URL).replace(/\/+$/, '');
 
@@ -96,6 +96,17 @@ export async function searchGutendex(query: string, page: number): Promise<Onlin
     page,
     total: Math.max(0, payload.count ?? 0),
     hasNextPage: Boolean(payload.next),
+    sourceErrors: [],
+  };
+}
+
+export function createGutendexProvider(
+  importBook: (sourceBookId: string, visualStyle: VisualStyle) => Promise<OnlineBookImportResult>,
+): OnlineBookProvider {
+  return {
+    source: 'gutenberg',
+    search: searchGutendex,
+    importBook,
   };
 }
 

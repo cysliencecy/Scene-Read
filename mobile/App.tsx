@@ -11,6 +11,8 @@ import {
   fetchSceneCandidates,
   importBook,
   importOnlineBook,
+  mergeOnlineBookSearchPages,
+  onlineBookErrorMessage,
   retryGenerationTask,
   searchOnlineBooks,
   submitChapterGenerationTask,
@@ -42,21 +44,6 @@ import type {
 } from './src/types/app';
 
 const POLLING_INTERVAL_MS = 3000;
-
-const onlineErrorMessage = (error: unknown) => {
-  const message = error instanceof Error ? error.message : '';
-  const code = error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : message;
-  const messages: Record<string, string> = {
-    BOOK_SOURCE_UNAVAILABLE: '在线书源暂时不可用，请稍后重试。',
-    BOOK_DOWNLOAD_FAILED: '书籍下载失败，请稍后重试。',
-    BOOK_DOWNLOAD_TOO_LARGE: '这本书超过 20 MB，暂不支持导入。',
-    ONLINE_BOOK_FORMAT_UNSUPPORTED: '这本书没有可用的 EPUB 或 UTF-8 TXT 格式。',
-    ONLINE_BOOK_PARSE_FAILED: '这本书的文件无法解析，请换一本试试。',
-    ONLINE_BOOK_HAS_NO_READABLE_TEXT: '没有解析到可阅读的正文。',
-    SUPABASE_NOT_CONFIGURED: '存储服务未配置，现在可以搜索，但不能导入。',
-  };
-  return messages[code] ?? message ?? '操作失败，请稍后重试。';
-};
 
 export default function App() {
   const [navigation, setNavigation] = useState<AppNavigationState>(initialNavigationState);
@@ -403,11 +390,11 @@ export default function App() {
     try {
       const result = await searchOnlineBooks(query, page);
       setOnlinePage((current) =>
-        page === 1 || !current ? result : { ...result, items: [...current.items, ...result.items] },
+        page === 1 || !current ? result : mergeOnlineBookSearchPages(current, result),
       );
       setApiStatus('connected');
     } catch (error) {
-      setOnlineError(onlineErrorMessage(error));
+      setOnlineError(onlineBookErrorMessage(error));
     } finally {
       setIsSearchingOnline(false);
     }
@@ -427,7 +414,7 @@ export default function App() {
         const importedBook = books.find((item) => item.id === book.importedBookId);
         if (importedBook) await openBookRecord(importedBook);
       } catch (error) {
-        setOnlineError(onlineErrorMessage(error));
+        setOnlineError(onlineBookErrorMessage(error));
       }
       return;
     }
@@ -468,7 +455,11 @@ export default function App() {
       setStyleError(null);
       setIsImportingOnline(true);
       try {
-        const result = await importOnlineBook(pendingOnlineBook.sourceBookId, navigation.visualStyle);
+        const result = await importOnlineBook(
+          pendingOnlineBook.source,
+          pendingOnlineBook.sourceBookId,
+          navigation.visualStyle,
+        );
         setShelfBooks((current) => [result.book, ...current.filter((book) => book.id !== result.book.id)]);
         setChaptersById((current) => {
           const next = { ...current };
@@ -480,7 +471,9 @@ export default function App() {
         setOnlinePage((current) => current ? {
           ...current,
           items: current.items.map((book) =>
-            book.sourceBookId === pendingOnlineBook.sourceBookId ? { ...book, importedBookId: result.book.id } : book,
+            book.source === pendingOnlineBook.source && book.sourceBookId === pendingOnlineBook.sourceBookId
+              ? { ...book, importedBookId: result.book.id }
+              : book,
           ),
         } : current);
         setNavigation((current) => ({
@@ -494,7 +487,7 @@ export default function App() {
         setPendingOnlineBook(null);
         setApiStatus('connected');
       } catch (error) {
-        setStyleError(onlineErrorMessage(error));
+        setStyleError(onlineBookErrorMessage(error));
       } finally {
         setIsImportingOnline(false);
       }

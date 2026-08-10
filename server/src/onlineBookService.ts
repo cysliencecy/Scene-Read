@@ -1,10 +1,15 @@
 import {
+  createGutendexProvider,
   downloadGutendexBookContent,
   downloadGutendexCover,
   getGutendexBook,
-  OnlineBookError,
-  searchGutendex,
 } from './gutendex.js';
+import {
+  normalizeOnlineBookProviderError,
+  OnlineBookError,
+  OnlineBookProviderRegistry,
+} from './onlineBookProvider.js';
+import type { OnlineBookProvider } from './onlineBookProvider.js';
 import { parseOnlineEpub, parseOnlineText } from './onlineBookParser.js';
 import {
   findBookBySource,
@@ -15,18 +20,67 @@ import {
   uploadBookCover,
 } from './repository.js';
 import { isSupabaseConfigured } from './supabaseClient.js';
-import type { Book, Chapter, OnlineBookImportResult, VisualStyle } from './types.js';
+import type { Book, Chapter, OnlineBookImportResult, OnlineBookSearchPage, VisualStyle } from './types.js';
+import {
+  createWikisourceProvider,
+  discoverWikisourceChapters,
+  fetchWikisourceChapterContents,
+  resolveWikisourceRoot,
+  WIKISOURCE_SOURCE_ATTRIBUTION,
+} from './wikisource.js';
+import type { WikisourceClientOptions } from './wikisource.js';
+import type { ImportOnlineBookInput } from './repository.js';
+
+const sourcePriority = { wikisource: 0, gutenberg: 1 } as const;
+const MAX_WIKISOURCE_BODY_BYTES = 20 * 1024 * 1024;
+
+export async function aggregateOnlineBookSearch(
+  providers: OnlineBookProvider[],
+  query: string,
+  page: number,
+): Promise<OnlineBookSearchPage> {
+  const settled = await Promise.allSettled(providers.map((provider) => provider.search(query, page)));
+  const successful = settled.flatMap((result, index) => result.status === 'fulfilled'
+    ? [{ provider: providers[index], page: result.value }]
+    : []);
+
+  if (successful.length === 0) {
+    throw new OnlineBookError('BOOK_SOURCE_UNAVAILABLE', 502);
+  }
+
+  successful.sort((left, right) => sourcePriority[left.provider.source] - sourcePriority[right.provider.source]);
+  const sourceErrors = settled.flatMap((result, index) => result.status === 'rejected'
+    ? [normalizeOnlineBookProviderError(providers[index].source, result.reason)]
+    : []);
+
+  return {
+    items: successful.flatMap((result) => result.page.items),
+    page,
+    total: successful.reduce((total, result) => total + result.page.total, 0),
+    hasNextPage: successful.some((result) => result.page.hasNextPage),
+    sourceErrors,
+  };
+}
+
+export const onlineBookProviderRegistry = new OnlineBookProviderRegistry();
 
 export async function searchOnlineBooks(query: string, page: number) {
-  const result = await searchGutendex(query, page);
+  const result = await aggregateOnlineBookSearch(onlineBookProviderRegistry.list(), query, page);
   try {
-    const importedIds = await findImportedBookIds(
-      'gutenberg',
-      result.items.map((item) => item.sourceBookId),
-    );
+    const sources = [...new Set(result.items.map((item) => item.source))];
+    const importedIdsBySource = new Map(await Promise.all(sources.map(async (source) => [
+      source,
+      await findImportedBookIds(
+        source,
+        result.items.filter((item) => item.source === source).map((item) => item.sourceBookId),
+      ),
+    ] as const)));
     return {
       ...result,
-      items: result.items.map((item) => ({ ...item, importedBookId: importedIds.get(item.sourceBookId) })),
+      items: result.items.map((item) => ({
+        ...item,
+        importedBookId: importedIdsBySource.get(item.source)?.get(item.sourceBookId),
+      })),
     };
   } catch {
     return result;
@@ -51,6 +105,137 @@ const buildChapters = (
       })),
     };
   });
+
+export async function prepareWikisourceImport(
+  sourceBookId: string,
+  visualStyle: VisualStyle,
+  options: WikisourceClientOptions = {},
+): Promise<{ book: Book; chapters: Chapter[] }> {
+  const root = await resolveWikisourceRoot(sourceBookId, options);
+  const descriptors = await discoverWikisourceChapters(root.sourceTitle, options);
+  if (descriptors.length === 0) throw new OnlineBookError('ONLINE_BOOK_HAS_NO_CHAPTERS', 422);
+
+  const content = await fetchWikisourceChapterContents(descriptors, options);
+  const readableContent = content.filter((chapter) => chapter.paragraphs.length > 0);
+  if (readableContent.length === 0) {
+    throw new OnlineBookError('ONLINE_BOOK_HAS_NO_READABLE_TEXT', 422);
+  }
+
+  let bodyBytes = 0;
+  for (const chapter of readableContent) {
+    for (const paragraph of chapter.paragraphs) {
+      bodyBytes += Buffer.byteLength(paragraph, 'utf8');
+      if (bodyBytes > MAX_WIKISOURCE_BODY_BYTES) {
+        throw new OnlineBookError('BOOK_DOWNLOAD_TOO_LARGE', 413);
+      }
+    }
+  }
+
+  const bookId = `import-wikisource-${root.pageId}`;
+  const chapters = readableContent.map((chapter): Chapter => {
+    const chapterId = `${bookId}-chapter-${chapter.order}`;
+    return {
+      id: chapterId,
+      bookId,
+      title: chapter.displayTitle,
+      progress: 0,
+      blocks: chapter.paragraphs.map((text, paragraphIndex) => ({
+        id: `${chapterId}-p-${paragraphIndex + 1}`,
+        type: 'paragraph',
+        text,
+      })),
+    };
+  });
+  const book: Book = {
+    id: bookId,
+    title: root.displayTitle,
+    progress: '新导入',
+    accent: '#426f76',
+    currentChapterId: chapters[0].id,
+    lastReadLabel: '准备开始第一章',
+    visualStyle,
+    authors: [],
+    languages: ['zh'],
+    source: 'wikisource',
+    sourceBookId: String(root.pageId),
+    sourceUrl: root.sourceUrl,
+    sourceAttribution: WIKISOURCE_SOURCE_ATTRIBUTION,
+    copyrightStatus: 'authorized',
+  };
+  return { book, chapters };
+}
+
+export type WikisourceImportDependencies = {
+  isPersistenceConfigured: boolean;
+  findBookBySource: (source: string, sourceBookId: string) => Promise<Book | null>;
+  listChaptersByBook: (bookId: string) => Promise<Chapter[]>;
+  prepareWikisourceImport: typeof prepareWikisourceImport;
+  persistOnlineBook: (input: ImportOnlineBookInput) => Promise<Book>;
+};
+
+const defaultWikisourceImportDependencies: WikisourceImportDependencies = {
+  isPersistenceConfigured: isSupabaseConfigured,
+  findBookBySource,
+  listChaptersByBook,
+  prepareWikisourceImport,
+  persistOnlineBook,
+};
+
+export async function importWikisourceBook(
+  sourceBookId: string,
+  visualStyle: VisualStyle,
+  options: WikisourceClientOptions = {},
+  dependencies: WikisourceImportDependencies = defaultWikisourceImportDependencies,
+): Promise<OnlineBookImportResult> {
+  if (!dependencies.isPersistenceConfigured) throw new OnlineBookError('SUPABASE_NOT_CONFIGURED', 503);
+  if (!/^\d+$/u.test(sourceBookId)) throw new OnlineBookError('INVALID_SOURCE_BOOK_ID', 400);
+  const numericSourceBookId = Number.parseInt(sourceBookId, 10);
+  if (!Number.isSafeInteger(numericSourceBookId)) throw new OnlineBookError('INVALID_SOURCE_BOOK_ID', 400);
+  const normalizedSourceBookId = String(numericSourceBookId);
+
+  const existing = await dependencies.findBookBySource('wikisource', normalizedSourceBookId);
+  if (existing) {
+    return {
+      book: existing,
+      chapters: await dependencies.listChaptersByBook(existing.id),
+      alreadyImported: true,
+    };
+  }
+
+  const prepared = await dependencies.prepareWikisourceImport(normalizedSourceBookId, visualStyle, options);
+  try {
+    const book = await dependencies.persistOnlineBook({ ...prepared, coverPath: null });
+    return {
+      book,
+      chapters: await dependencies.listChaptersByBook(book.id),
+      alreadyImported: false,
+    };
+  } catch (error) {
+    const racedExisting = await dependencies.findBookBySource('wikisource', normalizedSourceBookId).catch(() => null);
+    if (racedExisting) {
+      return {
+        book: racedExisting,
+        chapters: await dependencies.listChaptersByBook(racedExisting.id),
+        alreadyImported: true,
+      };
+    }
+    throw error;
+  }
+}
+
+export async function importOnlineBookBySource(
+  source: string,
+  sourceBookId: string,
+  visualStyle: VisualStyle,
+  registry: OnlineBookProviderRegistry = onlineBookProviderRegistry,
+) {
+  if (source !== 'gutenberg' && source !== 'wikisource') {
+    throw new OnlineBookError('INVALID_ONLINE_BOOK', 400);
+  }
+  const provider = registry.get(source);
+  if (!provider) throw new OnlineBookError('INVALID_ONLINE_BOOK', 400);
+  return provider.importBook(sourceBookId, visualStyle);
+}
 
 export async function importGutendexBook(
   sourceBookId: string,
@@ -122,3 +307,6 @@ export async function importGutendexBook(
     throw error;
   }
 }
+
+onlineBookProviderRegistry.register(createGutendexProvider(importGutendexBook));
+onlineBookProviderRegistry.register(createWikisourceProvider(importWikisourceBook));

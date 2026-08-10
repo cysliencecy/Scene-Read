@@ -4,6 +4,13 @@ export type VisualStyle = '写实' | '动漫' | '插画';
 
 export type BookCopyrightStatus = 'public_domain' | 'authorized' | 'unknown';
 
+export type OnlineBookSource = 'gutenberg' | 'wikisource';
+
+export type OnlineBookSourceError = {
+  source: OnlineBookSource;
+  code: string;
+};
+
 export type Book = {
   id: string;
   title: string;
@@ -15,20 +22,22 @@ export type Book = {
   authors?: string[];
   languages?: string[];
   coverUrl?: string;
-  source?: 'gutenberg';
+  source?: OnlineBookSource;
   sourceBookId?: string;
   sourceUrl?: string;
+  sourceAttribution?: string;
   copyrightStatus?: BookCopyrightStatus;
 };
 
 export type OnlineBook = {
-  source: 'gutenberg';
+  source: OnlineBookSource;
   sourceBookId: string;
   title: string;
   authors: string[];
   languages: string[];
   coverUrl?: string;
   sourceUrl: string;
+  sourceAttribution?: string;
   copyrightStatus: BookCopyrightStatus;
   downloadCount: number;
   canImport: boolean;
@@ -40,6 +49,7 @@ export type OnlineBookSearchPage = {
   page: number;
   total: number;
   hasNextPage: boolean;
+  sourceErrors: OnlineBookSourceError[];
 };
 
 export type OnlineBookImportResult = {

@@ -51,7 +51,61 @@ Copy-Item .env.example .env
 
 Then fill `SUPABASE_URL` and `SUPABASE_SECRET_KEY`. Full setup notes are in `docs/supabase-setup.md`.
 
-Online book search uses Gutendex and Project Gutenberg. `GUTENDEX_BASE_URL` is optional and defaults to `https://gutendex.com`. Run the latest `supabase/schema.sql` before importing an online book; search itself remains available when Supabase is not configured.
+Online book search aggregates Chinese Wikisource and Project Gutenberg. The App never fetches either source directly:
+
+- Gutenberg uses Gutendex metadata and Project Gutenberg EPUB/TXT downloads. `GUTENDEX_BASE_URL` defaults to `https://gutendex.com`.
+- Chinese Wikisource uses the official MediaWiki API. `WIKISOURCE_API_URL` defaults to `https://zh.wikisource.org/w/api.php`; overrides must use that exact HTTPS hostname and API path.
+- If one provider fails, search still returns the other provider's items and records the failed provider in `sourceErrors`. Only a total provider failure returns `BOOK_SOURCE_UNAVAILABLE`.
+
+Run the latest `supabase/schema.sql` before importing an online book. Search remains available without Supabase, but import returns `SUPABASE_NOT_CONFIGURED`.
+
+### Online book API
+
+```http
+GET /online-books/search?q=红楼梦&page=1
+```
+
+The response page contains `items`, `page`, `total`, `hasNextPage`, and `sourceErrors`. Each item has a stable composite identity of `source` plus `sourceBookId`; supported sources are `wikisource` and `gutenberg`.
+
+```http
+POST /online-books/import
+Content-Type: application/json
+
+{
+  "source": "wikisource",
+  "sourceBookId": "7683",
+  "visualStyle": "插画"
+}
+```
+
+Wikisource import resolves the stable root page, discovers recognizable direct chapter subpages, sorts them naturally, and requests simplified `zh-hans` TextExtracts. It validates the complete in-memory book before calling the atomic `import_online_book` RPC. Re-importing the same `(source, sourceBookId)` returns the existing book with `alreadyImported: true`.
+
+Limits and safety boundaries:
+
+- no more than 200 valid chapters;
+- no more than 20 MiB of final UTF-8 paragraph text;
+- TextExtracts batches contain at most 20 pages with at most three concurrent requests;
+- only `https://zh.wikisource.org/w/api.php` is trusted for Wikisource metadata and text;
+- links found inside source text are never followed;
+- a failed fetch, parse, limit check, or RPC does not persist a partial book.
+
+Stable online-book error codes:
+
+| Code | Meaning |
+| --- | --- |
+| `BOOK_SOURCE_UNAVAILABLE` | All search providers failed, or the selected source is unavailable. |
+| `BOOK_SOURCE_URL_REJECTED` | The configured Wikisource API URL is not the trusted HTTPS target. |
+| `BOOK_DOWNLOAD_FAILED` | A Gutenberg source file could not be downloaded. |
+| `ONLINE_BOOK_FORMAT_UNSUPPORTED` | A Gutenberg work has no supported EPUB or UTF-8 TXT format. |
+| `ONLINE_BOOK_PARSE_FAILED` | A downloaded Gutenberg file could not be parsed. |
+| `ONLINE_BOOK_NOT_FOUND` | The requested stable source page does not exist. |
+| `ONLINE_BOOK_HAS_NO_CHAPTERS` | No supported direct chapter subpages were found. |
+| `ONLINE_BOOK_HAS_NO_READABLE_TEXT` | The discovered chapters contained no readable paragraphs. |
+| `ONLINE_BOOK_TOO_MANY_CHAPTERS` | The work contains more than 200 valid chapters. |
+| `BOOK_DOWNLOAD_TOO_LARGE` | The final UTF-8 text exceeds 20 MiB. |
+| `SUPABASE_NOT_CONFIGURED` | Search is available, but persistent import is not configured. |
+
+Imported Wikisource books retain their canonical source URL and the attribution text `来源：中文维基文库；作品版权与许可状态以来源页标注为准`. `authorized` means the source platform supplies the work under its stated terms; it is not a blanket claim that every Wikisource work is public domain. Follow the canonical source page for the work-specific license notice.
 
 ## Validation
 
@@ -91,7 +145,8 @@ Included:
 - optional Supabase data layer for books, chapters, generation tasks, and scene images
 - Supabase Storage upload for generated scene images
 - local automatic Worker execution after chapter generation task submission
-- server-side Project Gutenberg search and full-text import through Gutendex
+- aggregated Chinese Wikisource and Project Gutenberg search with partial-provider failure handling
+- server-side Gutenberg EPUB/TXT import and Wikisource direct-chapter `zh-hans` whole-book import
 - EPUB-first parsing with UTF-8 TXT fallback, source metadata normalization, deduplication, and cover storage
 
 Not included:

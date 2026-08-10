@@ -1,6 +1,6 @@
 # Supabase 数据层设置
 
-T8 只建立数据层基础，不上传真实书籍内容，不提交本地密钥。
+本文最初记录 T8 数据层基础，现同时维护 V6 在线整本导入所需 schema 迁移。不向仓库上传真实书籍内容，也不提交本地密钥。
 
 ## 1. 创建项目
 
@@ -68,7 +68,7 @@ Invoke-RestMethod http://localhost:4000/books `
   -Body '{"title":"测试书","currentChapterId":"chapter-test-1"}'
 ```
 
-## 5. 边界
+## 5. T8 边界（历史范围）
 
 T8 不处理：
 
@@ -77,3 +77,40 @@ T8 不处理：
 - 原始书籍文件上传
 - AI 场景识别
 - 图片生成和 Storage 写入
+
+## 6. V6 在线整本导入 schema 迁移
+
+V6 多书源导入要求 `books` 保存稳定书源归属，并继续由单个 RPC 原子写入书籍及全部章节。部署或本地连接已有 Supabase 项目时，必须重新执行当前仓库的 `supabase/schema.sql`。
+
+本次 schema 变更包括：
+
+- `books.source_attribution text null`；
+- 保留 `(source, source_book_id)` 唯一索引，继续兼容 Gutenberg；
+- 删除旧签名并重新创建 `import_online_book`；
+- 新 RPC 参数 `p_source_attribution text default null`；
+- RPC 在同一事务中写入 book、chapters 和稳定的 `chapter_order`。
+
+迁移步骤：
+
+1. 在 Supabase SQL Editor 中打开并完整执行仓库根目录的 `supabase/schema.sql`。
+2. 不要只单独增加列：PostgREST 仍可能暴露旧 RPC 签名，导致导入参数不匹配。
+3. 执行后刷新 PostgREST schema cache，或等待项目自动刷新。
+4. 使用下面的只读 SQL 检查列和函数参数：
+
+```sql
+select column_name, data_type, is_nullable
+from information_schema.columns
+where table_schema = 'public'
+  and table_name = 'books'
+  and column_name = 'source_attribution';
+
+select pg_get_function_identity_arguments(p.oid) as arguments
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.proname = 'import_online_book';
+```
+
+预期第一条返回 `source_attribution / text / YES`，第二条函数签名包含 `p_source_attribution text`。迁移前不要调用在线整本导入；搜索不依赖该迁移，仍可只读使用。
+
+2026-08-10 的 W7 只读检查发现当前配置项目尚无 `books.source_attribution`（PostgreSQL `42703`）。本批没有执行远程迁移或写入；需要项目维护者明确执行最新 schema 后，再进行整本原子导入验收。详见 `docs/e2e-validation-v6-wikisource.md`。

@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import type { ImportedBookDraft } from '../import/bookImport';
+import { onlineBookSourceLabel, onlineBookSourceWarning } from '../api/client';
 import { colors } from '../theme/colors';
 import { sharedStyles } from '../theme/sharedStyles';
 import type { BookCopyrightStatus, OnlineBook, OnlineBookSearchPage } from '../types/app';
@@ -89,7 +90,7 @@ export function ImportScreen({
           contentContainerStyle={styles.onlineContent}
         >
           <Text style={styles.onlineTitle}>搜索公版或授权书籍</Text>
-          <Text style={styles.onlineDescription}>书籍由 Project Gutenberg 提供，导入后可离线阅读。</Text>
+          <Text style={styles.onlineDescription}>书籍由中文维基文库和 Project Gutenberg 提供，导入后可离线阅读。</Text>
           <View style={styles.searchRow}>
             <TextInput
               accessibilityLabel="搜索在线书籍"
@@ -112,10 +113,15 @@ export function ImportScreen({
           </View>
 
           {onlineError ? <Text style={styles.errorText}>{onlineError}</Text> : null}
+          {onlinePage?.sourceErrors.map((sourceError) => (
+            <Text key={`${sourceError.source}-${sourceError.code}`} style={styles.warningText}>
+              {onlineBookSourceWarning(sourceError)}
+            </Text>
+          ))}
           {!onlinePage && !isSearching ? (
             <View style={styles.emptyState}>
               <Text style={styles.emptyTitle}>从一个关键词开始</Text>
-              <Text style={styles.emptyDescription}>搜索结果按 Gutenberg 原始顺序展示，不做个性化推荐。</Text>
+              <Text style={styles.emptyDescription}>搜索结果按各书源原始顺序展示，不做个性化推荐。</Text>
             </View>
           ) : null}
           {onlinePage && onlinePage.items.length === 0 ? (
@@ -153,9 +159,9 @@ function TabButton({ active, label, onPress }: { active: boolean; label: string;
   );
 }
 
-const copyrightLabel = (status: BookCopyrightStatus) => {
+const copyrightLabel = (status: BookCopyrightStatus, source: OnlineBook['source']) => {
   if (status === 'public_domain') return '公版书';
-  if (status === 'authorized') return 'Gutenberg 授权分发';
+  if (status === 'authorized') return `${onlineBookSourceLabel(source)} 授权分发`;
   return '版权状态未知';
 };
 
@@ -171,9 +177,9 @@ function OnlineBookCard({ book, onSelect }: { book: OnlineBook; onSelect: (book:
       <View style={styles.resultCopy}>
         <Text numberOfLines={2} style={styles.resultTitle}>{book.title}</Text>
         <Text numberOfLines={2} style={styles.resultAuthor}>{book.authors.join(' · ') || '作者未知'}</Text>
-        <Text style={styles.resultMeta}>{book.languages.join(', ') || '语言未知'} · {copyrightLabel(book.copyrightStatus)}</Text>
+        <Text style={styles.resultMeta}>{book.languages.join(', ') || '语言未知'} · {copyrightLabel(book.copyrightStatus, book.source)}</Text>
         <Pressable accessibilityRole="link" onPress={() => Linking.openURL(book.sourceUrl)}>
-          <Text style={styles.resultSource}>来源：Project Gutenberg ↗</Text>
+          <Text style={styles.resultSource}>来源：{onlineBookSourceLabel(book.source)} ↗</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -212,6 +218,7 @@ const styles = StyleSheet.create({
   fileName: { color: colors.ink, fontSize: 14, fontWeight: '800' },
   fileMeta: { color: colors.muted, fontSize: 12, marginTop: 4 },
   errorText: { color: '#9d3b34', fontSize: 12, lineHeight: 18, marginTop: 12, textAlign: 'center' },
+  warningText: { color: colors.amber, fontSize: 12, lineHeight: 18, marginTop: 12, textAlign: 'center' },
   disabledButton: { opacity: 0.55 },
   onlineContent: { paddingHorizontal: 22, paddingTop: 24, paddingBottom: 40 },
   onlineTitle: { color: colors.ink, fontSize: 22, fontWeight: '900' },
