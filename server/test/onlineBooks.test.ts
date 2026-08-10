@@ -208,6 +208,30 @@ test('schema keeps one atomic import function and adds nullable source attributi
   assert.match(functionBody, /source_attribution/u);
 });
 
+test('persists and reads durable chapter order with a deterministic legacy fallback', () => {
+  const schema = readFileSync(new URL('../../supabase/schema.sql', import.meta.url), 'utf8');
+  const repository = readFileSync(new URL('../src/repository.ts', import.meta.url), 'utf8');
+  const input = preparedRpcBook('wikisource', '来源：中文维基文库');
+  input.chapters = [
+    { ...input.chapters[0], id: 'chapter-1', title: '第001回' },
+    { ...input.chapters[0], id: 'chapter-2', title: '第002回' },
+    { ...input.chapters[0], id: 'chapter-10', title: '第010回' },
+  ];
+
+  const args = buildImportOnlineBookRpcArgs({ ...input, coverPath: null });
+  assert.deepEqual(
+    (args.p_chapters as Array<{ title: string }>).map((chapter) => chapter.title),
+    ['第001回', '第002回', '第010回'],
+  );
+  assert.match(schema, /chapter_order\s+integer/u);
+  assert.match(schema, /alter table public\.chapters add column if not exists chapter_order integer/u);
+  assert.match(schema, /jsonb_array_elements\(p_chapters\)\s+with ordinality/iu);
+  assert.match(schema, /insert into public\.chapters\s*\([^)]*chapter_order[^)]*\)/iu);
+  assert.match(repository, /\.order\('chapter_order',\s*\{\s*ascending:\s*true,\s*nullsFirst:\s*false\s*\}\)/u);
+  assert.match(repository, /\.order\('created_at',\s*\{\s*ascending:\s*true\s*\}\)/u);
+  assert.match(repository, /\.order\('id',\s*\{\s*ascending:\s*true\s*\}\)/u);
+});
+
 const preparedRpcBook = (source: 'gutenberg' | 'wikisource', sourceAttribution: string | undefined) => ({
   book: {
     id: `import-${source}-1`,

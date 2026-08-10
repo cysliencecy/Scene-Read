@@ -49,9 +49,15 @@ create table if not exists public.chapters (
   title text not null,
   progress integer not null default 0 check (progress >= 0 and progress <= 100),
   blocks jsonb not null default '[]'::jsonb,
+  chapter_order integer check (chapter_order is null or chapter_order >= 1),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.chapters add column if not exists chapter_order integer;
+alter table public.chapters drop constraint if exists chapters_chapter_order_check;
+alter table public.chapters
+  add constraint chapters_chapter_order_check check (chapter_order is null or chapter_order >= 1);
 
 -- Replace the legacy 11-argument overload. The new trailing default keeps old
 -- Gutenberg callers valid while avoiding ambiguous PostgREST RPC resolution.
@@ -78,7 +84,7 @@ language plpgsql
 as $$
 declare
   imported_book public.books;
-  chapter jsonb;
+  chapter record;
 begin
   if jsonb_array_length(p_chapters) = 0 then
     raise exception 'ONLINE_BOOK_HAS_NO_CHAPTERS';
@@ -92,15 +98,16 @@ begin
     p_authors, p_languages, p_cover_path, p_source, p_source_book_id, p_source_url, p_source_attribution, p_copyright_status
   ) returning * into imported_book;
 
-  for chapter in select value from jsonb_array_elements(p_chapters)
+  for chapter in select value, ordinality from jsonb_array_elements(p_chapters) with ordinality
   loop
-    insert into public.chapters (id, book_id, title, progress, blocks)
+    insert into public.chapters (id, book_id, title, progress, blocks, chapter_order)
     values (
-      chapter->>'id',
+      chapter.value->>'id',
       p_book_id,
-      chapter->>'title',
-      coalesce((chapter->>'progress')::integer, 0),
-      coalesce(chapter->'blocks', '[]'::jsonb)
+      chapter.value->>'title',
+      coalesce((chapter.value->>'progress')::integer, 0),
+      coalesce(chapter.value->'blocks', '[]'::jsonb),
+      chapter.ordinality::integer
     );
   end loop;
 

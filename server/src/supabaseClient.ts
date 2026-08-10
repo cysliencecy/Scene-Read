@@ -71,6 +71,7 @@ export type Database = {
           title: string;
           progress: number;
           blocks: unknown;
+          chapter_order: number | null;
           created_at: string;
           updated_at: string;
         };
@@ -80,6 +81,7 @@ export type Database = {
           title: string;
           progress?: number;
           blocks?: unknown;
+          chapter_order?: number | null;
         };
         Update: {
           id?: string;
@@ -87,6 +89,7 @@ export type Database = {
           title?: string;
           progress?: number;
           blocks?: unknown;
+          chapter_order?: number | null;
         };
         Relationships: [];
       };

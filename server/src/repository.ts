@@ -337,7 +337,13 @@ export async function listChaptersByBook(bookId: string): Promise<Chapter[]> {
     return mockChapters.filter((chapter) => chapter.bookId === bookId);
   }
 
-  const { data, error } = await supabase.from('chapters').select('*').eq('book_id', bookId).order('created_at');
+  const { data, error } = await supabase
+    .from('chapters')
+    .select('*')
+    .eq('book_id', bookId)
+    .order('chapter_order', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true });
   if (error) throw error;
   return data.map(toChapter);
 }
