@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { prepareWikisourceImport } from '../src/onlineBookService.js';
 import { discoverWikisourceChapters, searchWikisource } from '../src/wikisource.js';
 
 type FixtureHandler = (url: URL) => unknown;
@@ -316,3 +317,278 @@ test('rejects the 201st classified chapter without truncating the work', async (
     },
   );
 });
+
+test('resolves the canonical root before discovery and assembles simplified readable chapters in memory', async () => {
+  const fetchImpl = fixtureFetch((url) => {
+    if (url.searchParams.get('prop') === 'info') {
+      assert.equal(url.searchParams.get('pageids'), '100');
+      return {
+        query: {
+          pages: [{
+            pageid: 100,
+            ns: 0,
+            title: '紅樓夢',
+            varianttitles: { 'zh-hans': '红楼梦' },
+            canonicalurl: 'https://zh.wikisource.org/wiki/%E7%B4%85%E6%A8%93%E5%A4%A2',
+          }],
+        },
+      };
+    }
+
+    if (url.searchParams.get('list') === 'allpages') {
+      assert.equal(url.searchParams.get('apprefix'), '紅樓夢/');
+      return {
+        query: {
+          allpages: [
+            { pageid: 102, ns: 0, title: '紅樓夢/第二回' },
+            { pageid: 101, ns: 0, title: '紅樓夢/第一回' },
+          ],
+        },
+      };
+    }
+
+    assert.equal(url.searchParams.get('prop'), 'extracts|info');
+    assert.equal(url.searchParams.get('variant'), 'zh-hans');
+    assert.equal(url.searchParams.get('explaintext'), '1');
+    assert.equal(url.searchParams.get('exsectionformat'), 'plain');
+    assert.equal(url.searchParams.get('exlimit'), 'max');
+    assert.equal(url.searchParams.get('titles'), '紅樓夢/第一回|紅樓夢/第二回');
+    return {
+      query: {
+        pages: [
+          {
+            pageid: 101,
+            ns: 0,
+            title: '紅樓夢/第一回',
+            varianttitles: { 'zh-hans': '红楼梦/第一回' },
+            extract: '== 第一回 ==\n\n回目录\n\n红楼梦正文。[1]\n这里提到上一回的故事。\n\n[编辑]\n\n[1]',
+          },
+          {
+            pageid: 102,
+            ns: 0,
+            title: '红楼梦/第二回',
+            extract: '\n\n第二回正文。\n\n下一回\n\n',
+          },
+        ],
+      },
+    };
+  });
+
+  const prepared = await prepareWikisourceImport('100', '插画', { fetchImpl });
+
+  assert.deepEqual(prepared.book, {
+    id: 'import-wikisource-100',
+    title: '红楼梦',
+    progress: '新导入',
+    accent: '#426f76',
+    currentChapterId: 'import-wikisource-100-chapter-1',
+    lastReadLabel: '准备开始第一章',
+    visualStyle: '插画',
+    authors: [],
+    languages: ['zh'],
+    source: 'wikisource',
+    sourceBookId: '100',
+    sourceUrl: 'https://zh.wikisource.org/wiki/%E7%B4%85%E6%A8%93%E5%A4%A2',
+    sourceAttribution: '来源：中文维基文库；作品版权与许可状态以来源页标注为准',
+    copyrightStatus: 'authorized',
+  });
+  assert.deepEqual(prepared.chapters, [
+    {
+      id: 'import-wikisource-100-chapter-1',
+      bookId: 'import-wikisource-100',
+      title: '第一回',
+      progress: 0,
+      blocks: [
+        { id: 'import-wikisource-100-chapter-1-p-1', type: 'paragraph', text: '第一回' },
+        { id: 'import-wikisource-100-chapter-1-p-2', type: 'paragraph', text: '红楼梦正文。\n这里提到上一回的故事。' },
+      ],
+    },
+    {
+      id: 'import-wikisource-100-chapter-2',
+      bookId: 'import-wikisource-100',
+      title: '第二回',
+      progress: 0,
+      blocks: [
+        { id: 'import-wikisource-100-chapter-2-p-1', type: 'paragraph', text: '第二回正文。' },
+      ],
+    },
+  ]);
+});
+
+test('fetches TextExtracts in batches of at most 20 with no more than three concurrent requests', async () => {
+  const extractBatchSizes: number[] = [];
+  let activeExtracts = 0;
+  let maxActiveExtracts = 0;
+  const pages = Array.from({ length: 61 }, (_, index) => ({
+    pageid: index + 1,
+    ns: 0,
+    title: `测试作品/第${index + 1}章`,
+  }));
+  const fetchImpl = (async (input) => {
+    const url = new URL(String(input));
+    if (url.searchParams.get('prop') === 'info') {
+      return new Response(JSON.stringify({
+        query: { pages: [{ pageid: 900, ns: 0, title: '测试作品' }] },
+      }));
+    }
+    if (url.searchParams.get('list') === 'allpages') {
+      return new Response(JSON.stringify({ query: { allpages: pages } }));
+    }
+
+    const titles = (url.searchParams.get('titles') ?? '').split('|');
+    extractBatchSizes.push(titles.length);
+    activeExtracts += 1;
+    maxActiveExtracts = Math.max(maxActiveExtracts, activeExtracts);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    activeExtracts -= 1;
+    const firstPageId = Number(titles[0].match(/\d+/u)?.[0]);
+    return new Response(JSON.stringify({
+      query: {
+        pages: titles.map((title, index) => ({
+          pageid: firstPageId + index,
+          ns: 0,
+          title,
+          extract: `正文 ${firstPageId + index}`,
+        })),
+      },
+    }));
+  }) as typeof fetch;
+
+  const prepared = await prepareWikisourceImport('900', '写实', { fetchImpl });
+
+  assert.deepEqual(extractBatchSizes.sort((left, right) => right - left), [20, 20, 20, 1]);
+  assert.equal(maxActiveExtracts, 3);
+  assert.equal(prepared.chapters.length, 61);
+});
+
+test('rejects a missing root page and a root without classified chapters before extracts', async () => {
+  let missingRootFetches = 0;
+  await assert.rejects(
+    prepareWikisourceImport('404', '写实', {
+      fetchImpl: fixtureFetch(() => {
+        missingRootFetches += 1;
+        return { query: { pages: [{ pageid: 404, ns: 0, title: '不存在', missing: true }] } };
+      }),
+    }),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'ONLINE_BOOK_NOT_FOUND');
+      return true;
+    },
+  );
+  assert.equal(missingRootFetches, 1);
+
+  let noChapterFetches = 0;
+  await assert.rejects(
+    prepareWikisourceImport('900', '写实', {
+      fetchImpl: fixtureFetch((url) => {
+        noChapterFetches += 1;
+        if (url.searchParams.get('prop') === 'info') {
+          return { query: { pages: [{ pageid: 900, ns: 0, title: '测试作品' }] } };
+        }
+        return { query: { allpages: [{ pageid: 1, ns: 0, title: '测试作品/目录' }] } };
+      }),
+    }),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'ONLINE_BOOK_HAS_NO_CHAPTERS');
+      return true;
+    },
+  );
+  assert.equal(noChapterFetches, 2);
+});
+
+test('fails the whole preparation when an extracts batch omits a requested page', async () => {
+  const fetchImpl = wikisourceImportFixture({
+    extracts: [{ pageid: 1, ns: 0, title: '测试作品/第一章', extract: '正文' }],
+  });
+
+  await assert.rejects(
+    prepareWikisourceImport('900', '写实', { fetchImpl }),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'BOOK_SOURCE_UNAVAILABLE');
+      return true;
+    },
+  );
+});
+
+test('rejects a work when every extracted chapter has no readable text', async () => {
+  const fetchImpl = wikisourceImportFixture({
+    extracts: [
+      { pageid: 1, ns: 0, title: '测试作品/第一章', extract: '回目录\n\n[编辑]\n\n[1]' },
+      { pageid: 2, ns: 0, title: '测试作品/第二章', extract: '\n\n下一章\n\n{{导航}}' },
+    ],
+  });
+
+  await assert.rejects(
+    prepareWikisourceImport('900', '写实', { fetchImpl }),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'ONLINE_BOOK_HAS_NO_READABLE_TEXT');
+      return true;
+    },
+  );
+});
+
+test('drops an empty chapter while preserving IDs from the discovered natural order', async () => {
+  const prepared = await prepareWikisourceImport('900', '写实', {
+    fetchImpl: wikisourceImportFixture({
+      extracts: [
+        { pageid: 1, ns: 0, title: '测试作品/第一章', extract: '回目录\n\n[1]' },
+        { pageid: 2, ns: 0, title: '测试作品/第二章', extract: '可读正文。' },
+      ],
+    }),
+  });
+
+  assert.deepEqual(prepared.chapters.map((chapter) => chapter.id), [
+    'import-wikisource-900-chapter-2',
+  ]);
+  assert.equal(prepared.book.currentChapterId, 'import-wikisource-900-chapter-2');
+});
+
+test('allows exactly 20 MiB of final UTF-8 paragraphs and rejects one byte more', async () => {
+  const limit = 20 * 1024 * 1024;
+  const atLimit = await prepareWikisourceImport('900', '写实', {
+    fetchImpl: wikisourceImportFixture({
+      extracts: [{ pageid: 1, ns: 0, title: '测试作品/第一章', extract: 'a'.repeat(limit) }],
+      chapterCount: 1,
+    }),
+  });
+  assert.equal(atLimit.chapters[0].blocks[0].text.length, limit);
+
+  await assert.rejects(
+    prepareWikisourceImport('900', '写实', {
+      fetchImpl: wikisourceImportFixture({
+        extracts: [{ pageid: 1, ns: 0, title: '测试作品/第一章', extract: 'a'.repeat(limit + 1) }],
+        chapterCount: 1,
+      }),
+    }),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'BOOK_DOWNLOAD_TOO_LARGE');
+      return true;
+    },
+  );
+});
+
+function wikisourceImportFixture({
+  extracts,
+  chapterCount = 2,
+}: {
+  extracts: Array<{ pageid: number; ns: number; title: string; extract: string }>;
+  chapterCount?: number;
+}) {
+  return fixtureFetch((url) => {
+    if (url.searchParams.get('prop') === 'info') {
+      return { query: { pages: [{ pageid: 900, ns: 0, title: '测试作品' }] } };
+    }
+    if (url.searchParams.get('list') === 'allpages') {
+      return {
+        query: {
+          allpages: Array.from({ length: chapterCount }, (_, index) => ({
+            pageid: index + 1,
+            ns: 0,
+            title: `测试作品/第${index + 1}章`,
+          })),
+        },
+      };
+    }
+    return { query: { pages: extracts } };
+  });
+}

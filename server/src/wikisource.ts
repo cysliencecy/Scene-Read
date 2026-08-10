@@ -6,8 +6,10 @@ const DEFAULT_WIKISOURCE_API_URL = 'https://zh.wikisource.org/w/api.php';
 const WIKISOURCE_HOSTNAME = 'zh.wikisource.org';
 const SEARCH_PAGE_SIZE = 20;
 const MAX_CHAPTERS = 200;
+const EXTRACT_BATCH_SIZE = 20;
+const MAX_EXTRACT_CONCURRENCY = 3;
 const REQUEST_TIMEOUT_MS = 15_000;
-const SOURCE_ATTRIBUTION = '来源：中文维基文库；作品版权与许可状态以来源页标注为准';
+export const WIKISOURCE_SOURCE_ATTRIBUTION = '来源：中文维基文库；作品版权与许可状态以来源页标注为准';
 
 export type WikisourceClientOptions = {
   apiUrl?: string;
@@ -34,6 +36,8 @@ type MediaWikiPage = {
   title?: string;
   canonicalurl?: string;
   fullurl?: string;
+  varianttitles?: Record<string, string>;
+  extract?: string;
   missing?: boolean;
 };
 
@@ -50,11 +54,31 @@ type MediaWikiAllPagesResponse = {
   };
 };
 
+type MediaWikiExtractsResponse = {
+  query?: {
+    pages?: MediaWikiPage[];
+  };
+};
+
+export type WikisourceRootDescriptor = {
+  pageId: number;
+  sourceTitle: string;
+  displayTitle: string;
+  sourceUrl: string;
+};
+
 export type WikisourceChapterDescriptor = {
   pageId: number;
   sourceTitle: string;
   displayTitle: string;
   order: number;
+};
+
+export type WikisourceChapterContent = {
+  pageId: number;
+  displayTitle: string;
+  order: number;
+  paragraphs: string[];
 };
 
 type ClassifiedChapter = Omit<WikisourceChapterDescriptor, 'order'> & {
@@ -150,6 +174,34 @@ function canonicalPageUrl(page: MediaWikiPage) {
   }
   const title = page.title?.trim().replaceAll(' ', '_') ?? '';
   return `https://${WIKISOURCE_HOSTNAME}/wiki/${encodeURIComponent(title)}`;
+}
+
+export async function resolveWikisourceRoot(
+  sourceBookId: string,
+  options: WikisourceClientOptions = {},
+): Promise<WikisourceRootDescriptor> {
+  if (!/^\d+$/u.test(sourceBookId)) throw new OnlineBookError('INVALID_SOURCE_BOOK_ID', 400);
+  const pageId = Number.parseInt(sourceBookId, 10);
+  if (!Number.isSafeInteger(pageId)) throw new OnlineBookError('INVALID_SOURCE_BOOK_ID', 400);
+
+  const apiUrl = configuredApiUrl(options);
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const response = await requestMediaWiki<MediaWikiRootResponse>(apiUrl, {
+    prop: 'info',
+    inprop: 'url|varianttitles',
+    pageids: String(pageId),
+  }, fetchImpl);
+  const page = response.query?.pages?.find((candidate) => candidate.pageid === pageId);
+  if (page?.missing || page?.ns !== 0 || !page?.title?.trim()) {
+    throw new OnlineBookError('ONLINE_BOOK_NOT_FOUND', 404);
+  }
+
+  return {
+    pageId,
+    sourceTitle: page.title.trim(),
+    displayTitle: page.varianttitles?.['zh-hans']?.trim() || page.title.trim(),
+    sourceUrl: canonicalPageUrl(page),
+  };
 }
 
 const CHINESE_DIGITS: Record<string, number> = {
@@ -298,6 +350,112 @@ export async function discoverWikisourceChapters(
     }));
 }
 
+const NAVIGATION_TOKEN = '(?:回?目录|返回目录|上一(?:回|章|节|卷|篇|页)|下一(?:回|章|节|卷|篇|页)|首页)';
+const NAVIGATION_LINE_PATTERN = new RegExp(`^(?:${NAVIGATION_TOKEN})+$`, 'u');
+const EDIT_CONTROL_PATTERN = /^\[?编辑(?:本段)?\]?$/u;
+const FOOTNOTE_MARKER_PATTERN = /^\[(?:\d+|注\s*\d*)\]$/u;
+const TEMPLATE_DECORATION_PATTERN = /^\{\{.*\}\}$/u;
+
+function cleanExtractLine(value: string) {
+  let line = value
+    .replace(/\[(?:\d+|注\s*\d*|编辑(?:本段)?)\]/gu, '')
+    .replace(/\{\{.*?\}\}/gu, '')
+    .trim();
+  if (!line) return null;
+  const heading = line.match(/^=+\s*(.*?)\s*=+$/u);
+  if (heading) line = heading[1].trim();
+  if (!line) return null;
+  const compactNavigation = line.replace(/[\s|｜·•<>←→«»/、，,]+/gu, '');
+  if (
+    NAVIGATION_LINE_PATTERN.test(compactNavigation)
+    || EDIT_CONTROL_PATTERN.test(line)
+    || FOOTNOTE_MARKER_PATTERN.test(line)
+    || TEMPLATE_DECORATION_PATTERN.test(line)
+  ) return null;
+  return line;
+}
+
+export function cleanWikisourceExtract(extract: string) {
+  return extract
+    .split(/\r?\n\s*\r?\n+/u)
+    .map((paragraph) => paragraph
+      .split(/\r?\n/u)
+      .flatMap((line) => {
+        const cleaned = cleanExtractLine(line);
+        return cleaned ? [cleaned] : [];
+      })
+      .join('\n'))
+    .filter(Boolean);
+}
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  transform: (value: T) => Promise<R>,
+) {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await transform(values[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function displayTitleFromExtractPage(page: MediaWikiPage, fallback: string) {
+  const returnedTitle = page.varianttitles?.['zh-hans']?.trim() || page.title?.trim();
+  if (!returnedTitle) return fallback;
+  const slashIndex = returnedTitle.lastIndexOf('/');
+  return (slashIndex >= 0 ? returnedTitle.slice(slashIndex + 1) : returnedTitle).trim() || fallback;
+}
+
+export async function fetchWikisourceChapterContents(
+  descriptors: WikisourceChapterDescriptor[],
+  options: WikisourceClientOptions = {},
+): Promise<WikisourceChapterContent[]> {
+  if (descriptors.length === 0) return [];
+  const apiUrl = configuredApiUrl(options);
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const batches = Array.from(
+    { length: Math.ceil(descriptors.length / EXTRACT_BATCH_SIZE) },
+    (_, index) => descriptors.slice(index * EXTRACT_BATCH_SIZE, (index + 1) * EXTRACT_BATCH_SIZE),
+  );
+
+  const batchResults = await mapWithConcurrency(batches, MAX_EXTRACT_CONCURRENCY, async (batch) => {
+    const response = await requestMediaWiki<MediaWikiExtractsResponse>(apiUrl, {
+      prop: 'extracts|info',
+      explaintext: '1',
+      exsectionformat: 'plain',
+      exlimit: 'max',
+      inprop: 'varianttitles',
+      titles: batch.map((descriptor) => descriptor.sourceTitle).join('|'),
+    }, fetchImpl);
+    const pagesById = new Map(
+      (response.query?.pages ?? [])
+        .filter((page): page is MediaWikiPage & { pageid: number } => Number.isInteger(page.pageid) && !page.missing)
+        .map((page) => [page.pageid, page]),
+    );
+    return batch.map((descriptor) => {
+      const page = pagesById.get(descriptor.pageId);
+      if (!page || typeof page.extract !== 'string') {
+        throw new OnlineBookError('BOOK_SOURCE_UNAVAILABLE', 502);
+      }
+      return {
+        pageId: descriptor.pageId,
+        displayTitle: displayTitleFromExtractPage(page, descriptor.displayTitle),
+        order: descriptor.order,
+        paragraphs: cleanWikisourceExtract(page.extract),
+      };
+    });
+  });
+
+  return batchResults.flat();
+}
+
 export async function searchWikisource(
   query: string,
   page: number,
@@ -351,7 +509,7 @@ export async function searchWikisource(
       authors: [],
       languages: ['zh'],
       sourceUrl: canonicalPageUrl(rootPage),
-      sourceAttribution: SOURCE_ATTRIBUTION,
+      sourceAttribution: WIKISOURCE_SOURCE_ATTRIBUTION,
       copyrightStatus: 'authorized' as const,
       downloadCount: 0,
       canImport: true,

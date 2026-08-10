@@ -21,8 +21,16 @@ import {
 } from './repository.js';
 import { isSupabaseConfigured } from './supabaseClient.js';
 import type { Book, Chapter, OnlineBookImportResult, OnlineBookSearchPage, VisualStyle } from './types.js';
+import {
+  discoverWikisourceChapters,
+  fetchWikisourceChapterContents,
+  resolveWikisourceRoot,
+  WIKISOURCE_SOURCE_ATTRIBUTION,
+} from './wikisource.js';
+import type { WikisourceClientOptions } from './wikisource.js';
 
 const sourcePriority = { wikisource: 0, gutenberg: 1 } as const;
+const MAX_WIKISOURCE_BODY_BYTES = 20 * 1024 * 1024;
 
 export async function aggregateOnlineBookSearch(
   providers: OnlineBookProvider[],
@@ -95,6 +103,65 @@ const buildChapters = (
       })),
     };
   });
+
+export async function prepareWikisourceImport(
+  sourceBookId: string,
+  visualStyle: VisualStyle,
+  options: WikisourceClientOptions = {},
+): Promise<{ book: Book; chapters: Chapter[] }> {
+  const root = await resolveWikisourceRoot(sourceBookId, options);
+  const descriptors = await discoverWikisourceChapters(root.sourceTitle, options);
+  if (descriptors.length === 0) throw new OnlineBookError('ONLINE_BOOK_HAS_NO_CHAPTERS', 422);
+
+  const content = await fetchWikisourceChapterContents(descriptors, options);
+  const readableContent = content.filter((chapter) => chapter.paragraphs.length > 0);
+  if (readableContent.length === 0) {
+    throw new OnlineBookError('ONLINE_BOOK_HAS_NO_READABLE_TEXT', 422);
+  }
+
+  let bodyBytes = 0;
+  for (const chapter of readableContent) {
+    for (const paragraph of chapter.paragraphs) {
+      bodyBytes += Buffer.byteLength(paragraph, 'utf8');
+      if (bodyBytes > MAX_WIKISOURCE_BODY_BYTES) {
+        throw new OnlineBookError('BOOK_DOWNLOAD_TOO_LARGE', 413);
+      }
+    }
+  }
+
+  const bookId = `import-wikisource-${root.pageId}`;
+  const chapters = readableContent.map((chapter): Chapter => {
+    const chapterId = `${bookId}-chapter-${chapter.order}`;
+    return {
+      id: chapterId,
+      bookId,
+      title: chapter.displayTitle,
+      progress: 0,
+      blocks: chapter.paragraphs.map((text, paragraphIndex) => ({
+        id: `${chapterId}-p-${paragraphIndex + 1}`,
+        type: 'paragraph',
+        text,
+      })),
+    };
+  });
+  const book: Book = {
+    id: bookId,
+    title: root.displayTitle,
+    progress: '新导入',
+    accent: '#426f76',
+    currentChapterId: chapters[0].id,
+    lastReadLabel: '准备开始第一章',
+    visualStyle,
+    authors: [],
+    languages: ['zh'],
+    source: 'wikisource',
+    sourceBookId: String(root.pageId),
+    sourceUrl: root.sourceUrl,
+    sourceAttribution: WIKISOURCE_SOURCE_ATTRIBUTION,
+    copyrightStatus: 'authorized',
+  };
+  return { book, chapters };
+}
 
 export async function importGutendexBook(
   sourceBookId: string,
