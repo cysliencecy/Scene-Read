@@ -18,4 +18,3 @@
 | W7 | serial | Batch 7 — documentation and live validation | W6 pass | blocked |
 
 Each wave requires a persisted review report under `.superpowers/sdd/reviews/` with verdict `pass` before its dependent wave begins.
-

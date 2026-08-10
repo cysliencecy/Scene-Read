@@ -131,6 +131,37 @@ test('deduplicates distinct resolved roots that share a canonical page id', asyn
   assert.deepEqual(result.items.map((item) => item.sourceBookId), ['100']);
 });
 
+test('uses the simplified variant title for search result cards', async () => {
+  const fetchImpl = fixtureFetch((url) => {
+    if (url.searchParams.get('list') === 'search') {
+      return {
+        query: {
+          searchinfo: { totalhits: 1 },
+          search: [{ ns: 0, pageid: 101, title: '紅樓夢/第一回' }],
+        },
+      };
+    }
+
+    assert.equal(url.searchParams.get('prop'), 'info');
+    assert.equal(url.searchParams.get('inprop'), 'url|varianttitles');
+    return {
+      query: {
+        pages: [{
+          pageid: 100,
+          ns: 0,
+          title: '紅樓夢',
+          varianttitles: { 'zh-hans': '红楼梦' },
+          canonicalurl: 'https://zh.wikisource.org/wiki/%E7%B4%85%E6%A8%93%E5%A4%A2',
+        }],
+      },
+    };
+  });
+
+  const result = await searchWikisource('红楼梦', 1, { fetchImpl });
+
+  assert.equal(result.items[0].title, '红楼梦');
+});
+
 test('uses simplified search parameters and maps MediaWiki continuation to provider pagination', async () => {
   const requestedUrls: URL[] = [];
   const fetchImpl = fixtureFetch((url) => {
@@ -198,6 +229,27 @@ test('rejects non-HTTPS and non-Wikisource API targets before fetching', async (
   }
 
   assert.equal(fetchCalls, 0);
+});
+
+test('rejects an HTTP redirect without following an untrusted target', async () => {
+  let fetchCalls = 0;
+  const fetchImpl = (async (_input, init) => {
+    fetchCalls += 1;
+    assert.equal(init?.redirect, 'manual');
+    return new Response(null, {
+      status: 302,
+      headers: { Location: 'https://untrusted.example.test/books.json' },
+    });
+  }) as typeof fetch;
+
+  await assert.rejects(
+    searchWikisource('红楼梦', 1, { fetchImpl }),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'BOOK_SOURCE_URL_REJECTED');
+      return true;
+    },
+  );
+  assert.equal(fetchCalls, 1);
 });
 
 test('discovers direct main-namespace chapters across continuation and sorts supported forms naturally', async () => {

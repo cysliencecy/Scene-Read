@@ -128,6 +128,7 @@ async function requestMediaWiki<T>(
   let response: Response;
   try {
     response = await fetchImpl(url, {
+      redirect: 'manual',
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         Accept: 'application/json',
@@ -143,6 +144,9 @@ async function requestMediaWiki<T>(
     );
   }
 
+  if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+    throw new OnlineBookError('BOOK_SOURCE_URL_REJECTED', 502);
+  }
   if (!response.ok) throw new OnlineBookError('BOOK_SOURCE_UNAVAILABLE', 502);
   try {
     return await response.json() as T;
@@ -486,7 +490,7 @@ export async function searchWikisource(
 
   const rootResponse = await requestMediaWiki<MediaWikiRootResponse>(apiUrl, {
     prop: 'info',
-    inprop: 'url',
+    inprop: 'url|varianttitles',
     redirects: '1',
     converttitles: '1',
     titles: rootTitles.join('|'),
@@ -505,7 +509,7 @@ export async function searchWikisource(
     return [{
       source: 'wikisource' as const,
       sourceBookId: String(rootPage.pageid),
-      title: rootPage.title.trim(),
+      title: rootPage.varianttitles?.['zh-hans']?.trim() || rootPage.title.trim(),
       authors: [],
       languages: ['zh'],
       sourceUrl: canonicalPageUrl(rootPage),
