@@ -9,8 +9,8 @@
 ## Waves
 
 - W1: complete — commits 8a4a5b0..d996bc7; replacement review pass in `.superpowers/sdd/reviews/w1-rereview.md`
-- W2: retrying — initial review failed in `.superpowers/sdd/reviews/w2-review.md`; focused root-normalization repair implemented and awaiting replacement review
-- W3: blocked on W2 pass
+- W2: complete — commits a277796..a0574ad; replacement review pass in `.superpowers/sdd/reviews/w2-rereview.md`
+- W3: eligible — Batch 3 chapter discovery and ordering
 - W4: blocked on W3 pass
 - W5: blocked on W4 pass
 - W6: blocked on W5 pass

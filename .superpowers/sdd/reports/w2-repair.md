@@ -36,4 +36,3 @@ A separate fixture resolves two distinct root titles to the same canonical `page
 ## Scope
 
 The repair changes only W2 root normalization and its deterministic fixtures. It does not add W3 chapter discovery behavior or modify other providers.
-
