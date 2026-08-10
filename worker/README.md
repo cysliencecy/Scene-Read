@@ -2,14 +2,15 @@
 
 Python Worker for chapter text processing and scene recognition.
 
-Current T12 scope:
+The formal expanded-image flow:
 
-- Read one chapter payload.
-- Use Kimi K3 through its Anthropic-compatible API when configured.
-- Output location/environment changes, source snippets, insertion positions, prompt drafts, validation logs.
-- Fall back to local heuristic recognition when no AI key is configured.
-- Generate at least one scene image from the selected prompt.
-- Post generated image data back to the API so the server can upload to Supabase Storage and write `scene_images`.
+- Uses Kimi K3 for whole-chapter discovery and local-context six-type classification.
+- Saves below-threshold candidates for debug without generating an image.
+- Builds a deterministic `3:2` composition prompt, generates once with GLM, and audits once.
+- Posts candidates to `/worker/scene-candidates` and attempts to `/worker/image-generation-attempts`.
+- Publishes only attempts accepted by the audit; blocked artifacts remain debug-only.
+
+The local `heuristic` and `mock-svg` modes remain development aids. They are not formal generation fallbacks and cannot publish a new formal reader image.
 
 ## Requirements
 
@@ -57,19 +58,24 @@ For manual Worker runs, put GLM image settings in `worker/.env`:
 IMAGE_PROVIDER=glm
 GLM_API_KEY=your-glm-or-bigmodel-key
 GLM_IMAGE_MODEL=glm-image
-GLM_IMAGE_SIZE=1024x1024
 ```
 
-For App import flow triggered by the server, also put the image provider in `server/.env`, because the server process starts the Worker:
+For App import flow triggered by the Server, configure credentials and audit settings in `server/.env`, because the Server process starts the Worker:
 
 ```text
-IMAGE_PROVIDER=glm
-WORKER_SCENE_PROVIDER=auto
+WORKER_AUTO_RUN=true
 WORKER_MAX_IMAGES=1
 GLM_API_KEY=your-glm-or-bigmodel-key
 GLM_IMAGE_MODEL=glm-image
-GLM_IMAGE_SIZE=1024x1024
+VISION_AUDIT_ENDPOINT=https://your-vision-endpoint.example/v1/audit
+VISION_AUDIT_MODEL=vision-model
+VISION_AUDIT_VERSION=audit-v1
 ```
+
+The Server hard-fences formal tasks to Kimi classification and GLM generation. `WORKER_SCENE_PROVIDER` and `IMAGE_PROVIDER` are used only by standalone/local-debug Worker commands and cannot override formal Server dispatch.
+
+Formal GLM requests always use the code-owned supported landscape size `1536x1024`;
+there is no runtime size override.
 
 Do not commit real API keys.
 
@@ -116,10 +122,10 @@ Write output to a file:
 python -m scene_reader_worker --input samples/chapter-input.json --output .tmp/scene-candidates.json
 ```
 
-Post output to the local API:
+Run the formal two-stage pipeline against a local API task. This posts canonical candidates and attempt callbacks to their dedicated endpoints:
 
 ```powershell
-python -m scene_reader_worker --input samples/chapter-input.json --api-url http://localhost:4000
+python -m scene_reader_worker --task-id task-1 --api-url http://localhost:4000 --provider openai --generate-images --image-provider glm --max-images 1
 ```
 
 Generate one image and include it in the output:
@@ -140,11 +146,27 @@ Use the default external image provider:
 python -m scene_reader_worker --input samples/chapter-input.json --provider openai --generate-images --max-images 1
 ```
 
-Generate and post the image to the local API:
+Local debug-only heuristic output can still be inspected, but it does not create a formal attempt or reader projection:
 
 ```powershell
-python -m scene_reader_worker --input samples/chapter-input.json --provider heuristic --generate-images --image-provider mock-svg --api-url http://localhost:4000
+python -m scene_reader_worker --input samples/chapter-input.json --provider heuristic --output .tmp/heuristic-debug.json
 ```
+
+The full migration, activation, callback, and rollback procedure is in [`docs/expanded-image-pipeline.md`](../docs/expanded-image-pipeline.md).
+
+## Offline expanded-image quality gate
+
+The six-type activation gate is a local, offline evaluator. It validates exactly 60 unique, evidence-backed samples (ten each for `environment`, `portrait`, `interaction`, `action`, `object`, and `atmosphere`) and writes only a JSON plus Markdown report. It never calls Server/Supabase or Worker callbacks, and evaluation mode intentionally has no `--api-url` option.
+
+```powershell
+$env:PYTHONPATH = 'src'
+& 'C:\Users\18270\AppData\Local\Programs\Python\Python313\python.exe' scripts/run_expanded_image_quality_check.py `
+  --samples samples/expanded-image-quality-samples.json `
+  --results samples/expanded-image-quality-results.example.json `
+  --output .tmp/expanded-image-quality-report.json
+```
+
+The checked-in results file is an explicitly non-activation example fixture; it deliberately fails the severe fact-conflict gate. Use a fresh pipeline/audit snapshot and the review process in [`docs/expanded-image-quality-gate.md`](../docs/expanded-image-quality-gate.md) for an actual direct-activation decision.
 
 ## Output
 

@@ -1,52 +1,97 @@
 from __future__ import annotations
 
-from .types import ChapterPayload
+from dataclasses import dataclass
+
+from .types import BookVisualProfile, CandidateSeed, ChapterBlock, ChapterPayload
 
 
-SCENE_RECOGNITION_SYSTEM_PROMPT = """
-你是阅境 SceneReader 的视觉锚点识别器。你的任务不是总结剧情，而是从中文小说章节中找出最适合插入阅读辅助插图的位置。
+DISCOVERY_PROMPT_VERSION = "kimi-discovery-v1"
+CLASSIFICATION_PROMPT_VERSION = "kimi-classification-v1"
 
-优先选择能帮助读者理解场景、人物关系或关键线索的视觉锚点。图片类型只能是：
-- scene：地点、空间、环境变化、光线、天气、室内外切换
-- character：关键人物首次出场、人物外貌或姿态有明确视觉信息、人物关系强转折
-- object：关键物品、线索、信物、文件、道具
-
-不要因为纯情绪变化、纯心理活动、普通对话转折而强行选择。
-
-输出必须是 JSON，不要 Markdown，不要解释。JSON 结构：
-{
-  "candidates": [
-    {
-      "sourceBlockId": "段落 id",
-      "position": 0,
-      "imageType": "scene",
-      "locationChange": "简短说明地点、环境、人物或物品锚点",
-      "reason": "为什么这里最能帮助阅读理解",
-      "sourceText": "原文短片段，不超过 120 字",
-      "promptDraft": "给后续生图用的中文提示词草稿，必须符合 imageType，并强调阅读插图、克制、不要文字水印",
-      "confidence": 0.0
-    }
-  ]
-}
-
-最多输出 6 个候选。候选要尽量分布在章节不同位置；如果有 2 个以上候选，尽量覆盖不同 imageType。没有可靠候选时返回空数组。
+DISCOVERY_SYSTEM_PROMPT = """
+You discover visual anchors for a reading illustration in a complete chapter.
+Return only JSON candidates with sourceBlockId, readingValue, evidence, and reason.
+Read the whole chapter, prefer anchors that help a reader understand setting, relationships,
+or a pivotal visible detail, and do not make final image-type decisions in this stage.
 """.strip()
+
+CLASSIFICATION_SYSTEM_PROMPT = """
+You classify one visual anchor using only its local textual context and profile snapshots.
+Return exactly three distinct canonical image types in descending confidence order. Valid types
+are environment, portrait, interaction, action, object, and atmosphere. Return supported
+evidence, a reason, auxiliary tags, and any profile fact suggestions. Do not invent facts.
+""".strip()
+
+# Retained so callers of the former prompt API continue to receive the discovery stage.
+SCENE_RECOGNITION_SYSTEM_PROMPT = DISCOVERY_SYSTEM_PROMPT
+
+
+@dataclass(frozen=True)
+class ClassificationContext:
+    target: CandidateSeed
+    paragraphs: tuple[ChapterBlock, ...]
+    profiles: tuple[BookVisualProfile, ...]
+
+
+def _chapter_paragraphs(payload: ChapterPayload) -> tuple[ChapterBlock, ...]:
+    return tuple(block for block in payload["blocks"] if block.get("type") == "paragraph" and block.get("text", "").strip())
+
+
+def build_discovery_user_prompt(payload: ChapterPayload) -> str:
+    blocks = [f"[{index}] id={block['id']}\n{block['text'].strip()}" for index, block in enumerate(_chapter_paragraphs(payload))]
+    return "\n\n".join(
+        (
+            f"bookId={payload['bookId']}",
+            f"chapterId={payload['chapterId']}",
+            f"chapterTitle={payload['chapterTitle']}",
+            "whole-chapter paragraphs:",
+            "\n\n".join(blocks),
+        )
+    )
 
 
 def build_scene_recognition_user_prompt(payload: ChapterPayload) -> str:
-    blocks = []
-    for index, block in enumerate(payload["blocks"]):
-        if block.get("type") != "paragraph":
-            continue
-        text = block.get("text", "").strip()
-        if text:
-            blocks.append(f"[{index}] id={block['id']}\n{text}")
+    return build_discovery_user_prompt(payload)
 
-    chapter_text = "\n\n".join(blocks)
-    return (
-        f"书籍 ID：{payload['bookId']}\n"
-        f"章节 ID：{payload['chapterId']}\n"
-        f"章节标题：{payload['chapterTitle']}\n\n"
-        "请识别本章适合插入阅读辅助插图的视觉锚点，输出 scene / character / object 类型：\n\n"
-        f"{chapter_text}"
+
+def build_classification_context(
+    payload: ChapterPayload,
+    candidate: CandidateSeed,
+    profiles: tuple[BookVisualProfile, ...] = (),
+) -> ClassificationContext:
+    paragraphs = _chapter_paragraphs(payload)
+    try:
+        target_index = next(index for index, block in enumerate(paragraphs) if block["id"] == candidate.sourceBlockId)
+    except StopIteration as error:
+        raise ValueError(f"Candidate source block {candidate.sourceBlockId!r} is not a chapter paragraph.") from error
+    return ClassificationContext(
+        target=candidate,
+        paragraphs=paragraphs[max(0, target_index - 2) : target_index + 3],
+        profiles=profiles,
+    )
+
+
+def _profile_snapshot(profile: BookVisualProfile) -> str:
+    facts = (*profile.stableFacts, *profile.flexibleFacts)
+    serialized_facts = " | ".join(f"{fact.field}={fact.value}" for fact in facts)
+    return f"{profile.entityType}:{profile.entityKey};facts=[{serialized_facts}];version={profile.version}"
+
+
+def build_classification_user_prompt(context: ClassificationContext) -> str:
+    paragraphs = "\n\n".join(
+        f"id={block['id']}\n{block['text'].strip()}" for block in context.paragraphs
+    )
+    profiles = "\n".join(_profile_snapshot(profile) for profile in context.profiles) or "none"
+    evidence = " | ".join(f"{item.sourceBlockId}:{item.sourceText}" for item in context.target.evidence)
+    return "\n\n".join(
+        (
+            f"candidateId={context.target.id}",
+            f"targetBlockId={context.target.sourceBlockId}",
+            f"discoveryReason={context.target.reason}",
+            f"discoveryEvidence={evidence}",
+            "target paragraph plus up to two available paragraphs on each side:",
+            paragraphs,
+            "book visual profiles:",
+            profiles,
+        )
     )

@@ -5,13 +5,26 @@ import json
 import time
 import urllib.parse
 import urllib.request
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .image_generator import generate_images_for_candidates, select_candidates_for_generation, target_image_count_for_paragraphs
-from .processor import process_chapter, result_to_dict
-from .types import ChapterPayload
+from .audit import audit_image
+from .composition import build_generation_prompt, get_composition_contract
+from .image_generator import generate_formal_image, target_image_count_for_paragraphs
+from .pipeline import generation_attempt_callback_payload, run_generation_attempt
+from .processor import (
+    candidate_callback_payload,
+    formal_generation_eligible,
+    process_chapter,
+    result_to_dict,
+)
+from .types import (
+    BookVisualProfile,
+    ChapterPayload,
+    ImageGenerationRequest,
+    VisualEvidence,
+    VisualProfileFact,
+)
 
 
 def _read_json(path: Path) -> ChapterPayload:
@@ -50,18 +63,7 @@ def _patch_task(api_url: str, task_id: str, payload: object) -> None:
 
 def _post_to_api(api_url: str, payload: object) -> None:
     url = f"{api_url.rstrip('/')}/worker/scene-candidates"
-    sanitized_payload = payload
-    if isinstance(payload, dict) and isinstance(payload.get("generatedImages"), list):
-        sanitized_payload = {
-            **payload,
-            "generatedImages": [
-                {key: value for key, value in image.items() if key != "imageBase64"}
-                if isinstance(image, dict)
-                else image
-                for image in payload["generatedImages"]
-            ],
-        }
-    body = json.dumps(sanitized_payload, ensure_ascii=False).encode("utf-8")
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         url,
         data=body,
@@ -73,18 +75,66 @@ def _post_to_api(api_url: str, payload: object) -> None:
         response.read()
 
 
-def _post_scene_image_to_api(api_url: str, payload: object) -> None:
-    url = f"{api_url.rstrip('/')}/worker/scene-images"
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+def _post_attempt_to_api(api_url: str, payload: object) -> None:
+    _request_json(f"{api_url.rstrip('/')}/worker/image-generation-attempts", method="POST", payload=payload)
+
+
+def _profile_fact(payload: dict[str, Any]) -> VisualProfileFact:
+    return VisualProfileFact(
+        field=payload["field"],
+        value=payload["value"],
+        sourceBlockId=payload["sourceBlockId"],
+        sourceText=payload["sourceText"],
+        stability=payload["stability"],
     )
 
-    with urllib.request.urlopen(request, timeout=30) as response:
-        response.read()
+
+def _profile(payload: dict[str, Any]) -> BookVisualProfile:
+    return BookVisualProfile(
+        id=payload["id"],
+        bookId=payload["bookId"],
+        entityType=payload["entityType"],
+        entityKey=payload["entityKey"],
+        stableFacts=tuple(_profile_fact(fact) for fact in payload.get("stableFacts", [])),
+        flexibleFacts=tuple(_profile_fact(fact) for fact in payload.get("flexibleFacts", [])),
+        version=payload["version"],
+    )
+
+
+def _execute_manual_generation(payload: ChapterPayload, *, image_provider: str) -> dict[str, Any]:
+    manual = payload["manualGeneration"]
+    contract = get_composition_contract(manual["requestedType"])
+    if contract.version != manual["contractVersion"]:
+        raise RuntimeError("Manual task contract version does not match the prompt registry.")
+    prompt = build_generation_prompt(
+        image_type=manual["requestedType"],
+        evidence=tuple(VisualEvidence(**item) for item in manual["evidence"]),
+        profiles=tuple(_profile(item) for item in payload.get("profiles", [])),
+        style="鍐欏疄",
+        auxiliary_tags=manual.get("auxiliaryTags", []),
+    )
+    request = ImageGenerationRequest(
+        idempotencyKey=manual["idempotencyKey"],
+        candidateId=manual["candidateId"],
+        taskId=payload["taskId"],
+        trigger="manual",
+        requestedType=manual["requestedType"],
+        prompt=prompt,
+        style="鍐欏疄",
+        aspectRatio="3:2",
+        contractVersion=manual["contractVersion"],
+    )
+    attempt = run_generation_attempt(
+        request,
+        provider=image_provider,
+        generate=lambda formal_request: generate_formal_image(formal_request, image_provider),
+        audit=audit_image,
+    )
+    return generation_attempt_callback_payload(
+        request,
+        attempt,
+        parent_attempt_id=manual.get("parentAttemptId"),
+    )
 
 
 def main() -> int:
@@ -119,36 +169,112 @@ def main() -> int:
                 {"status": "recognizing", "progress": 20, "label": "正在识别章节视觉锚点"},
             )
 
-        processed = process_chapter(payload, provider=args.provider)
+        manual = payload.get("manualGeneration")
+        if manual and manual.get("kind") == "generate":
+            image_provider = args.image_provider or "glm"
+            if args.task_id:
+                _patch_task(
+                    args.api_url,
+                    args.task_id,
+                    {"status": "generating", "progress": 60, "label": "Manual image generation in progress"},
+                )
+            callback = _execute_manual_generation(payload, image_provider=image_provider)
+            result = {"taskId": payload["taskId"], "status": "completed", "attempts": [callback]}
+            if args.output:
+                _write_json(Path(args.output), result)
+            if args.api_url:
+                _post_attempt_to_api(args.api_url, callback)
+                if args.task_id:
+                    _patch_task(
+                        args.api_url,
+                        args.task_id,
+                        {
+                            "status": "completed",
+                            "progress": 100,
+                            "label": "Manual image generation completed",
+                            "provider": image_provider,
+                            "durationMs": int((time.perf_counter() - started_at) * 1000),
+                        },
+                    )
+            if not args.output:
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+
+        profiles = tuple(_profile(item) for item in payload.get("profiles", []))
+        processed = process_chapter(payload, provider=args.provider, profiles=profiles)
         result = result_to_dict(processed)
 
-        if args.generate_images:
+        if args.generate_images and processed.provider != "heuristic":
             target_images = target_image_count_for_paragraphs(len(payload["blocks"]), max_images=args.max_images)
-            selected_candidates = select_candidates_for_generation(processed.candidates, target_images)
-            result["selectedCandidateIds"] = [candidate.id for candidate in selected_candidates]
-            if args.api_url:
-                _post_to_api(args.api_url, result)
             if args.task_id:
                 _patch_task(
                     args.api_url,
                     args.task_id,
                     {"status": "generating", "progress": 60, "label": f"正在生成 {target_images} 张阅读辅助图"},
                 )
-            generated_images = generate_images_for_candidates(
-                selected_candidates,
-                provider=args.image_provider,
-                max_images=args.max_images,
-                target_images=len(selected_candidates),
-            )
-            result["generatedImages"] = [asdict(image) for image in generated_images]
+            image_provider = args.image_provider or "glm"
+            attempts = []
+            eligible_candidates = [
+                candidate
+                for candidate in processed.classifiedCandidates
+                if formal_generation_eligible(
+                    candidate.classification, candidate.provider
+                )
+            ]
+            for candidate in eligible_candidates[:target_images]:
+                classification = candidate.classification
+                contract = get_composition_contract(classification.primaryType)
+                if contract.version != candidate.contractVersion:
+                    raise RuntimeError(
+                        "Classified candidate contract version does not match the prompt registry."
+                    )
+                if any(
+                    profile.version != candidate.profileVersion
+                    for profile in processed.profiles
+                ):
+                    raise RuntimeError(
+                        "Classified candidate profile version does not match the prompt snapshot."
+                    )
+                prompt = build_generation_prompt(
+                    image_type=classification.primaryType,
+                    evidence=classification.evidence,
+                    profiles=processed.profiles,
+                    style="写实",
+                    auxiliary_tags=classification.auxiliaryTags,
+                )
+                request = ImageGenerationRequest(
+                    idempotencyKey=f"{payload['taskId']}:{candidate.seed.id}",
+                    candidateId=candidate.seed.id,
+                    taskId=payload["taskId"],
+                    trigger="automatic",
+                    requestedType=classification.primaryType,
+                    prompt=prompt,
+                    style="写实",
+                    aspectRatio="3:2",
+                    contractVersion=candidate.contractVersion,
+                )
+                attempt = run_generation_attempt(
+                    request,
+                    provider=image_provider,
+                    generate=lambda formal_request: generate_formal_image(
+                        formal_request, image_provider
+                    ),
+                    audit=audit_image,
+                )
+                attempts.append(
+                    generation_attempt_callback_payload(request, attempt)
+                )
+            result["attempts"] = attempts
+        elif args.generate_images:
+            result["generationSkipped"] = "heuristic classifications are debug-only and cannot generate formal images"
 
         if args.output:
             _write_json(Path(args.output), result)
 
         if args.api_url:
-            _post_to_api(args.api_url, result)
-            for image in result.get("generatedImages", []):
-                _post_scene_image_to_api(args.api_url, image)
+            _post_to_api(args.api_url, candidate_callback_payload(processed))
+            for attempt in result.get("attempts", []):
+                _post_attempt_to_api(args.api_url, attempt)
             if args.task_id:
                 _patch_task(
                     args.api_url,

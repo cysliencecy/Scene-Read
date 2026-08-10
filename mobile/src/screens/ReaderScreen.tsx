@@ -32,6 +32,7 @@ import {
   saveReaderPreferences,
 } from '../reader/storage';
 import type { Chapter, GenerationTask, SceneImage as SceneImageData } from '../types/app';
+import { filterPublishableReaderImages } from './sceneDebugModel';
 
 export type ReaderChapterEntry = 'saved' | 'start' | 'end';
 
@@ -121,6 +122,10 @@ export function ReaderScreen({
           })
         : [],
     [chapter, layout.height, layout.width, preferences],
+  );
+  const chapterSceneImages = useMemo(
+    () => filterPublishableReaderImages(sceneImages).filter((image) => image.chapterId === chapter.id),
+    [chapter.id, sceneImages],
   );
 
   const currentChapterIndex = chapters.findIndex((item) => item.id === chapter.id);
@@ -321,7 +326,7 @@ export function ReaderScreen({
             />
           ) : null;
         }
-        const image = sceneImages.find((candidate) => candidate.id === item.block.imageId);
+        const image = chapterSceneImages.find((candidate) => candidate.id === item.block.imageId);
         return image ? (
           <SceneImage
             key={item.key}

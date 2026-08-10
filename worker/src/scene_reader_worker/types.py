@@ -1,10 +1,60 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict
+from typing import Any, Iterable, Literal, TypeVar, TypedDict, cast
 
 
-ImageType = Literal["scene", "character", "object"]
+CANONICAL_IMAGE_TYPES = (
+    "environment",
+    "portrait",
+    "interaction",
+    "action",
+    "object",
+    "atmosphere",
+)
+STORED_IMAGE_TYPES = ("scene", "character", *CANONICAL_IMAGE_TYPES)
+COMPOSITION_CONTRACT_VERSION = "composition-v1"
+PROFILE_VERSION = "profile-v1"
+
+CanonicalImageType = Literal[
+    "environment", "portrait", "interaction", "action", "object", "atmosphere"
+]
+StoredImageType = Literal[
+    "scene", "character", "environment", "portrait", "interaction", "action", "object", "atmosphere"
+]
+ClassificationStatus = Literal["eligible", "below_threshold", "invalid"]
+AttemptTrigger = Literal["automatic", "manual"]
+AttemptStatus = Literal[
+    "queued", "generation_failed", "audit_failed", "blocked", "publishable"
+]
+VisualStyle = Literal["写实", "动漫", "插画"]
+
+# Kept as a compatibility alias while legacy SceneCandidate records are still read.
+# New classification code must use CanonicalImageType and require_canonical_image_type.
+ImageType = StoredImageType
+
+_TupleItem = TypeVar("_TupleItem")
+
+
+def normalize_tuple(values: Iterable[_TupleItem] | None) -> tuple[_TupleItem, ...]:
+    """Return an immutable sequence, using one normalization rule across domain records."""
+    return tuple(values or ())
+
+
+def require_canonical_image_type(value: str) -> CanonicalImageType:
+    if value not in CANONICAL_IMAGE_TYPES:
+        raise ValueError(f"New classifications require a canonical image type; received {value!r}.")
+    return cast(CanonicalImageType, value)
+
+
+def validate_profile_fact(fact: VisualProfileFact) -> VisualProfileFact:
+    if not fact.field.strip() or not fact.value.strip():
+        raise ValueError("Profile facts require a non-empty field and value.")
+    if fact.stability not in ("stable", "inferred"):
+        raise ValueError("Profile fact stability must be either 'stable' or 'inferred'.")
+    if fact.stability == "stable" and (not fact.sourceBlockId.strip() or not fact.sourceText.strip()):
+        raise ValueError("Stable profile facts require sourceBlockId and sourceText evidence.")
+    return fact
 
 
 class ChapterBlock(TypedDict):
@@ -22,6 +72,144 @@ class ChapterPayload(TypedDict):
 
 
 @dataclass(frozen=True)
+class RankedImageType:
+    imageType: CanonicalImageType
+    confidence: float
+
+    def __post_init__(self) -> None:
+        require_canonical_image_type(self.imageType)
+
+
+@dataclass(frozen=True)
+class VisualEvidence:
+    sourceBlockId: str
+    sourceText: str
+
+
+@dataclass(frozen=True)
+class CandidateSeed:
+    id: str
+    chapterId: str
+    sourceBlockId: str
+    position: int
+    readingValue: float
+    reason: str
+    evidence: tuple[VisualEvidence, ...]
+
+
+@dataclass(frozen=True)
+class VisualProfileFact:
+    field: str
+    value: str
+    sourceBlockId: str
+    sourceText: str
+    stability: Literal["stable", "inferred"]
+
+    def __post_init__(self) -> None:
+        validate_profile_fact(self)
+
+
+@dataclass(frozen=True)
+class BookVisualProfile:
+    id: str
+    bookId: str
+    entityType: Literal["character", "location"]
+    entityKey: str
+    stableFacts: tuple[VisualProfileFact, ...]
+    flexibleFacts: tuple[VisualProfileFact, ...]
+    version: str = PROFILE_VERSION
+
+    def __post_init__(self) -> None:
+        for fact in self.stableFacts:
+            validate_profile_fact(fact)
+            if fact.stability != "stable":
+                raise ValueError("BookVisualProfile.stableFacts may contain only stable facts.")
+        for fact in self.flexibleFacts:
+            validate_profile_fact(fact)
+            if fact.stability != "inferred":
+                raise ValueError("BookVisualProfile.flexibleFacts may contain only inferred facts.")
+
+
+@dataclass(frozen=True)
+class CandidateClassification:
+    primaryType: CanonicalImageType
+    rankedTypes: tuple[RankedImageType, ...]
+    evidence: tuple[VisualEvidence, ...]
+    reason: str
+    auxiliaryTags: tuple[str, ...]
+    profileFactSuggestions: tuple[VisualProfileFact, ...]
+    status: ClassificationStatus
+    model: str
+    promptVersion: str
+
+    def __post_init__(self) -> None:
+        require_canonical_image_type(self.primaryType)
+        for ranked_type in self.rankedTypes:
+            require_canonical_image_type(ranked_type.imageType)
+
+
+@dataclass(frozen=True)
+class CompositionContract:
+    imageType: CanonicalImageType
+    subjectCount: str
+    shotScale: str
+    subjectRatio: str
+    cameraRequirements: tuple[str, ...]
+    requiredComposition: tuple[str, ...]
+    exclusions: tuple[str, ...]
+    aspectRatio: Literal["3:2"]
+    version: str = COMPOSITION_CONTRACT_VERSION
+
+
+@dataclass(frozen=True)
+class ImageGenerationRequest:
+    idempotencyKey: str
+    candidateId: str
+    taskId: str
+    trigger: AttemptTrigger
+    requestedType: CanonicalImageType
+    prompt: str
+    style: VisualStyle
+    aspectRatio: Literal["3:2"]
+    contractVersion: str
+
+    def __post_init__(self) -> None:
+        require_canonical_image_type(self.requestedType)
+        if self.aspectRatio != "3:2":
+            raise ValueError("Formal image generation requests require aspectRatio='3:2'.")
+
+
+@dataclass(frozen=True)
+class GeneratedImageArtifact:
+    imageBase64: str
+    mimeType: str
+    provider: str
+    model: str
+    width: int
+    height: int
+
+
+@dataclass(frozen=True)
+class ImageAuditRuleResult:
+    rule: str
+    passed: bool
+    severity: Literal["info", "warning", "severe"]
+    explanation: str
+
+
+@dataclass(frozen=True)
+class ImageAuditResult:
+    verdict: Literal["publishable", "blocked"]
+    rules: tuple[ImageAuditRuleResult, ...]
+    severeFactConflict: bool
+    provider: str
+    model: str
+    auditVersion: str
+
+
+# Existing worker flow types. They retain StoredImageType so historical values can be read
+# until Batch 2 migrates classification and selection orchestration.
+@dataclass(frozen=True)
 class SceneCandidate:
     id: str
     chapterId: str
@@ -33,6 +221,17 @@ class SceneCandidate:
     imageType: ImageType = "scene"
     locationChange: str = ""
     confidence: float = 0.0
+
+
+@dataclass(frozen=True)
+class ClassifiedCandidate:
+    """A discovery seed paired with its complete, validated classification snapshot."""
+
+    seed: CandidateSeed
+    classification: CandidateClassification
+    provider: Literal["kimi", "heuristic"]
+    contractVersion: str = COMPOSITION_CONTRACT_VERSION
+    profileVersion: str = PROFILE_VERSION
 
 
 @dataclass(frozen=True)
@@ -51,3 +250,5 @@ class WorkerResult:
     candidates: list[SceneCandidate]
     provider: Literal["openai", "heuristic"]
     logs: list[WorkerLog]
+    classifiedCandidates: tuple[ClassifiedCandidate, ...] = ()
+    profiles: tuple[BookVisualProfile, ...] = ()

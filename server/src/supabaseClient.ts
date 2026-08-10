@@ -140,7 +140,9 @@ export type Database = {
           chapter_id: string;
           source_block_id: string | null;
           position: number | null;
-          image_type: 'scene' | 'character' | 'object' | null;
+          image_type: 'scene' | 'character' | 'environment' | 'portrait' | 'interaction' | 'action' | 'object' | 'atmosphere' | null;
+          candidate_id: string | null;
+          attempt_id: string | null;
           variant: 'street' | 'office';
           prompt: string;
           image_path: string | null;
@@ -152,7 +154,9 @@ export type Database = {
           chapter_id: string;
           source_block_id?: string | null;
           position?: number | null;
-          image_type?: 'scene' | 'character' | 'object' | null;
+          image_type?: 'scene' | 'character' | 'environment' | 'portrait' | 'interaction' | 'action' | 'object' | 'atmosphere' | null;
+          candidate_id?: string | null;
+          attempt_id?: string | null;
           variant: 'street' | 'office';
           prompt: string;
           image_path?: string | null;
@@ -162,7 +166,9 @@ export type Database = {
           chapter_id?: string;
           source_block_id?: string | null;
           position?: number | null;
-          image_type?: 'scene' | 'character' | 'object' | null;
+          image_type?: 'scene' | 'character' | 'environment' | 'portrait' | 'interaction' | 'action' | 'object' | 'atmosphere' | null;
+          candidate_id?: string | null;
+          attempt_id?: string | null;
           variant?: 'street' | 'office';
           prompt?: string;
           image_path?: string | null;
@@ -182,7 +188,7 @@ export type Database = {
           source_text: string;
           prompt_draft: string;
           final_prompt: string | null;
-          image_type: 'scene' | 'character' | 'object' | null;
+          image_type: 'scene' | 'character' | 'environment' | 'portrait' | 'interaction' | 'action' | 'object' | 'atmosphere' | null;
           location_change: string | null;
           confidence: number;
           provider: string | null;
@@ -190,6 +196,10 @@ export type Database = {
           prompt_version: string | null;
           raw_response: unknown;
           selected_for_generation: boolean;
+          classification_snapshot: unknown;
+          classification_status: 'eligible' | 'below_threshold' | 'invalid' | null;
+          contract_version: string | null;
+          profile_version: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -205,7 +215,7 @@ export type Database = {
           source_text: string;
           prompt_draft: string;
           final_prompt?: string | null;
-          image_type?: 'scene' | 'character' | 'object' | null;
+          image_type?: 'scene' | 'character' | 'environment' | 'portrait' | 'interaction' | 'action' | 'object' | 'atmosphere' | null;
           location_change?: string | null;
           confidence?: number;
           provider?: string | null;
@@ -213,6 +223,10 @@ export type Database = {
           prompt_version?: string | null;
           raw_response?: unknown;
           selected_for_generation?: boolean;
+          classification_snapshot?: unknown;
+          classification_status?: 'eligible' | 'below_threshold' | 'invalid' | null;
+          contract_version?: string | null;
+          profile_version?: string | null;
         };
         Update: {
           id?: string;
@@ -226,7 +240,7 @@ export type Database = {
           source_text?: string;
           prompt_draft?: string;
           final_prompt?: string | null;
-          image_type?: 'scene' | 'character' | 'object' | null;
+          image_type?: 'scene' | 'character' | 'environment' | 'portrait' | 'interaction' | 'action' | 'object' | 'atmosphere' | null;
           location_change?: string | null;
           confidence?: number;
           provider?: string | null;
@@ -234,7 +248,23 @@ export type Database = {
           prompt_version?: string | null;
           raw_response?: unknown;
           selected_for_generation?: boolean;
+          classification_snapshot?: unknown;
+          classification_status?: 'eligible' | 'below_threshold' | 'invalid' | null;
+          contract_version?: string | null;
+          profile_version?: string | null;
         };
+        Relationships: [];
+      };
+      book_visual_profiles: {
+        Row: { id: string; book_id: string; entity_type: 'character' | 'location'; entity_key: string; stable_facts: unknown; flexible_facts: unknown; version: string; created_at: string; updated_at: string };
+        Insert: { id?: string; book_id: string; entity_type: 'character' | 'location'; entity_key: string; stable_facts?: unknown; flexible_facts?: unknown; version: string };
+        Update: { id?: string; book_id?: string; entity_type?: 'character' | 'location'; entity_key?: string; stable_facts?: unknown; flexible_facts?: unknown; version?: string };
+        Relationships: [];
+      };
+      image_generation_attempts: {
+        Row: { id: string; idempotency_key: string; candidate_id: string; task_id: string; parent_attempt_id: string | null; trigger: 'automatic' | 'manual'; requested_type: 'environment' | 'portrait' | 'interaction' | 'action' | 'object' | 'atmosphere'; overridden_from: 'scene' | 'character' | 'environment' | 'portrait' | 'interaction' | 'action' | 'object' | 'atmosphere' | null; status: 'queued' | 'generation_failed' | 'audit_failed' | 'blocked' | 'publishable'; prompt: string; provider: string | null; model: string | null; width: number | null; height: number | null; image_url: string | null; audit: unknown; classification_snapshot: unknown; contract_version: string | null; profile_version: string | null; artifact_metadata: unknown; created_at: string; updated_at: string };
+        Insert: { id?: string; idempotency_key: string; candidate_id: string; task_id: string; parent_attempt_id?: string | null; trigger: 'automatic' | 'manual'; requested_type: 'environment' | 'portrait' | 'interaction' | 'action' | 'object' | 'atmosphere'; overridden_from?: 'scene' | 'character' | 'environment' | 'portrait' | 'interaction' | 'action' | 'object' | 'atmosphere' | null; status: 'queued' | 'generation_failed' | 'audit_failed' | 'blocked' | 'publishable'; prompt: string; provider?: string | null; model?: string | null; width?: number | null; height?: number | null; image_url?: string | null; audit?: unknown; classification_snapshot?: unknown; contract_version?: string | null; profile_version?: string | null; artifact_metadata?: unknown };
+        Update: never;
         Relationships: [];
       };
     };

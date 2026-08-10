@@ -21,15 +21,19 @@ Default URL:
 http://localhost:4000
 ```
 
-When the App submits `POST /chapters/:chapterId/generation-task`, the local API starts one Worker process automatically by default. This is meant for the first local product loop: import a book, stay on the reader page, then wait for the generated scene image to appear.
+When the App submits `POST /chapters/:chapterId/generation-task`, the local API starts one Worker process only when `WORKER_AUTO_RUN=true`. This opt-in supports the local product loop: import a book, stay on the reader page, then wait for the generated scene image to appear.
 
-Worker defaults:
+Formal Worker activation and limits:
 
 ```powershell
-$env:WORKER_SCENE_PROVIDER="heuristic"
-$env:IMAGE_PROVIDER="mock-svg"
+$env:WORKER_AUTO_RUN="true"
 $env:WORKER_MAX_IMAGES="1"
+$env:VISION_AUDIT_ENDPOINT="https://your-vision-endpoint.example/v1/audit"
+$env:VISION_AUDIT_MODEL="vision-model"
+$env:VISION_AUDIT_VERSION="audit-v1"
 ```
+
+Formal dispatch is closed unless `WORKER_AUTO_RUN` is exactly `true`, and its arguments are hard-fenced to Kimi classification plus GLM generation. `WORKER_SCENE_PROVIDER`, `IMAGE_PROVIDER`, `heuristic`, and `mock-svg` cannot override a formal task. Formal tasks fail closed when Kimi, GLM, or vision-audit configuration is unavailable. See [`docs/expanded-image-pipeline.md`](../docs/expanded-image-pipeline.md) before migration or activation.
 
 On Windows, the server tries `py -3` by default. If your machine does not have the Python launcher configured, set the Python 3 executable explicitly before running the server:
 
@@ -110,6 +114,7 @@ Imported Wikisource books retain their canonical source URL and the attribution 
 ## Validation
 
 ```powershell
+npm test
 npm run typecheck
 npm run build
 npm test
@@ -129,10 +134,131 @@ npm test
 - `GET /generation-tasks`
 - `POST /generation-tasks`
 - `GET /generation-tasks/:taskId`
+- `GET /scene-candidates?chapterId=:chapterId&includeAttempts=true`
+- `POST /scene-candidates/:candidateId/regenerations`
+- `GET /scene-images`
 - `GET /scene-images/:imageId`
 - `POST /worker/scene-candidates`
-- `GET /worker/scene-candidates`
-- `POST /worker/scene-images`
+- `POST /worker/image-generation-attempts`
+- `GET /worker/tasks/:taskId/chapter-payload`
+
+## Expanded image callback order
+
+The Worker first loads the chapter payload. It includes the current `profiles` array used by classification and prompt construction. The Worker then posts canonical candidates before attempts so every attempt has an existing candidate parent:
+
+```text
+GET  /worker/tasks/task-1/chapter-payload
+POST /worker/scene-candidates
+POST /worker/image-generation-attempts
+PATCH /worker/tasks/task-1
+```
+
+Candidate callbacks use the approved ranked-classification shape. Repeating the same candidate IDs replaces no history and returns the same logical debug records:
+
+```json
+{
+  "taskId": "task-1",
+  "bookId": "book-1",
+  "chapterId": "chapter-1",
+  "candidates": [{
+    "id": "candidate-1",
+    "sourceBlockId": "p1",
+    "position": 0,
+    "readingValue": 0.9,
+    "classification": {
+      "primaryType": "environment",
+      "rankedTypes": [
+        { "imageType": "environment", "confidence": 0.91 },
+        { "imageType": "atmosphere", "confidence": 0.72 },
+        { "imageType": "object", "confidence": 0.31 }
+      ],
+      "evidence": [{ "sourceBlockId": "p1", "sourceText": "Rain crossed the bridge." }],
+      "reason": "The bridge establishes the setting.",
+      "auxiliaryTags": ["rain"],
+      "status": "eligible",
+      "model": "kimi-k3",
+      "promptVersion": "kimi-classification-v1"
+    },
+    "contractVersion": "composition-v1",
+    "profileVersion": "profile-v1"
+  }],
+  "profileFactSuggestions": []
+}
+```
+
+Attempt callbacks are idempotent by `idempotencyKey`. Only `publishable` attempts update `scene_images`; blocked and failed artifacts remain in candidate debug history only. There is no direct Worker-to-reader projection endpoint.
+
+```json
+{
+  "idempotencyKey": "task-1:candidate-1",
+  "candidateId": "candidate-1",
+  "taskId": "task-1",
+  "trigger": "automatic",
+  "requestedType": "environment",
+  "prompt": "deterministic 3:2 prompt",
+  "status": "blocked",
+  "provider": "glm",
+  "model": "glm-image-1",
+  "width": 768,
+  "height": 512,
+  "imageBase64": "...",
+  "mimeType": "image/png",
+  "audit": {
+    "verdict": "blocked",
+    "rules": [{
+      "rule": "fact-consistency",
+      "passed": false,
+      "severity": "severe",
+      "explanation": "The generated landmark conflicts with the source facts."
+    }],
+    "severeFactConflict": true,
+    "provider": "vision",
+    "model": "vision-model",
+    "auditVersion": "audit-v1"
+  }
+}
+```
+
+Manual regeneration is candidate-scoped and requires both an explicitly confirmed canonical override and an idempotency key:
+
+```http
+POST /scene-candidates/candidate-1/regenerations
+Content-Type: application/json
+
+{ "overrideImageType": "interaction", "idempotencyKey": "manual-2026-08-07-1" }
+```
+
+The response contains the queued task and append-only attempt, linked to the previous attempt through `parentAttemptId`. Repeating the request returns the same pair. A legacy `character` candidate submitted without a confirmed override receives a `reclassify` instruction; the server never assumes `portrait`.
+
+Worker attempt callbacks use the dedicated append-only endpoint; only `publishable` creates or replaces a reader projection:
+
+```powershell
+$attempt = @{
+  idempotencyKey = 'task-1:candidate-1'
+  candidateId = 'candidate-1'
+  taskId = 'task-1'
+  trigger = 'automatic'
+  requestedType = 'environment'
+  prompt = 'deterministic 3:2 prompt'
+  status = 'publishable'
+  provider = 'glm'
+  model = 'glm-image'
+  width = 1536
+  height = 1024
+  imageBase64 = '<base64>'
+  mimeType = 'image/png'
+  audit = @{
+    verdict = 'publishable'
+    rules = @(@{
+      rule = 'environment-composition'; passed = $true; severity = 'info'
+      explanation = 'The image satisfies the environment composition contract.'
+    })
+    severeFactConflict = $false
+    provider = 'vision'; model = 'vision-model'; auditVersion = 'audit-v1'
+  }
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Method Post -Uri 'http://localhost:4000/worker/image-generation-attempts' -ContentType 'application/json' -Body $attempt
+```
 
 ## Scope
 

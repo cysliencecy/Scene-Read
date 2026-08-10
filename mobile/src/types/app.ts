@@ -64,7 +64,73 @@ export type StyleOption = {
   colors: [string, string];
 };
 
-export type ImageType = 'scene' | 'character' | 'object';
+export type CanonicalImageType =
+  | 'environment'
+  | 'portrait'
+  | 'interaction'
+  | 'action'
+  | 'object'
+  | 'atmosphere';
+
+export type StoredImageType = CanonicalImageType | 'scene' | 'character';
+/** @deprecated Use StoredImageType for legacy reads or CanonicalImageType for new writes. */
+export type ImageType = StoredImageType;
+export type ClassificationStatus = 'eligible' | 'below_threshold' | 'invalid';
+export type AttemptStatus = 'queued' | 'generation_failed' | 'audit_failed' | 'blocked' | 'publishable';
+
+export type RankedImageType = {
+  imageType: CanonicalImageType;
+  confidence: number;
+};
+
+export type CandidateClassification = {
+  primaryType: CanonicalImageType;
+  rankedTypes: [RankedImageType, RankedImageType, RankedImageType];
+  evidence: Array<{ sourceBlockId: string; sourceText: string }>;
+  reason: string;
+  auxiliaryTags: string[];
+  status: ClassificationStatus;
+  model: string;
+  promptVersion: string;
+};
+
+export type ImageAuditResult = {
+  verdict: 'publishable' | 'blocked';
+  rules: Array<{
+    rule: string;
+    passed: boolean;
+    severity: 'info' | 'warning' | 'severe';
+    explanation: string;
+  }>;
+  severeFactConflict: boolean;
+  provider: string;
+  model: string;
+  auditVersion: string;
+};
+
+export type ImageGenerationAttempt = {
+  id: string;
+  idempotencyKey: string;
+  candidateId: string;
+  taskId: string;
+  parentAttemptId?: string;
+  trigger: 'automatic' | 'manual';
+  requestedType: CanonicalImageType;
+  overriddenFrom?: StoredImageType;
+  status: AttemptStatus;
+  prompt: string;
+  provider?: string;
+  model?: string;
+  width?: number;
+  height?: number;
+  imageUrl?: string;
+  audit?: ImageAuditResult;
+  classificationSnapshot?: CandidateClassification;
+  contractVersion?: string;
+  profileVersion?: string;
+  artifactMetadata?: unknown;
+  createdAt: string;
+};
 
 export type ChapterBlock =
   | {
@@ -97,6 +163,10 @@ export type SceneImage = {
   sourceBlockId?: string;
   position?: number;
   imageType?: ImageType;
+  effectiveImageType?: CanonicalImageType | null;
+  candidateId?: string;
+  attemptId?: string;
+  attemptStatus?: AttemptStatus;
   variant: 'street' | 'office';
   prompt: string;
   imagePath?: string;
@@ -129,6 +199,11 @@ export type SceneCandidate = {
   promptDraft: string;
   finalPrompt?: string;
   imageType?: ImageType;
+  effectiveImageType?: CanonicalImageType | null;
+  classification?: CandidateClassification;
+  classificationStatus?: ClassificationStatus;
+  contractVersion?: string;
+  profileVersion?: string;
   locationChange?: string;
   confidence: number;
   selectedForGeneration?: boolean;
@@ -136,5 +211,19 @@ export type SceneCandidate = {
   model?: string;
   promptVersion?: string;
   rawResponse?: unknown;
+};
+
+export type SceneCandidateDebugDetail = SceneCandidate & {
+  storedImageType?: StoredImageType;
+  effectiveImageType?: CanonicalImageType | null;
+  classification?: CandidateClassification;
+  contractVersion?: string;
+  profileVersion?: string;
+  attempts: ImageGenerationAttempt[];
+};
+
+export type ManualRegenerationResult = {
+  task: GenerationTask;
+  attempt: ImageGenerationAttempt;
 };
 

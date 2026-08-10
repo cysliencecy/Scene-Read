@@ -8,16 +8,24 @@ import {
   fetchChapters,
   fetchGenerationTasks,
   fetchSceneImages,
-  fetchSceneCandidates,
   importBook,
   importOnlineBook,
   mergeOnlineBookSearchPages,
   onlineBookErrorMessage,
+  fetchSceneCandidateDetails,
+  requestManualRegeneration,
   retryGenerationTask,
   searchOnlineBooks,
   submitChapterGenerationTask,
 } from './src/api/client';
 import { pickAndParseBook, type ImportedBookDraft } from './src/import/bookImport';
+import {
+  books as mockBooks,
+  chapters as mockChapters,
+  generationTasks as mockGenerationTasks,
+  sceneCandidateDebugDetails as mockSceneCandidates,
+  sceneImages as mockSceneImages,
+} from './src/data/mockData';
 import {
   getRouteTitle,
   initialNavigationState,
@@ -34,16 +42,24 @@ import { StyleScreen } from './src/screens/StyleScreen';
 import { colors } from './src/theme/colors';
 import type {
   Book,
-  Chapter,
-  GenerationTask,
   OnlineBook,
   OnlineBookSearchPage,
-  SceneCandidate,
+  CanonicalImageType,
+  Chapter,
+  GenerationTask,
+  SceneCandidateDebugDetail,
   SceneImage,
   VisualStyle,
 } from './src/types/app';
 
 const POLLING_INTERVAL_MS = 3000;
+
+const withDevelopmentDebugFixtures = (
+  candidates: SceneCandidateDebugDetail[],
+  chapterId: string,
+) => candidates.length > 0 || !__DEV__
+  ? candidates
+  : mockSceneCandidates.filter((candidate) => candidate.chapterId === chapterId);
 
 export default function App() {
   const [navigation, setNavigation] = useState<AppNavigationState>(initialNavigationState);
@@ -51,7 +67,7 @@ export default function App() {
   const [chaptersById, setChaptersById] = useState<Record<string, Chapter>>({});
   const [generationTasks, setGenerationTasks] = useState<GenerationTask[]>([]);
   const [sceneImages, setSceneImages] = useState<SceneImage[]>([]);
-  const [sceneCandidates, setSceneCandidates] = useState<SceneCandidate[]>([]);
+  const [sceneCandidates, setSceneCandidates] = useState<SceneCandidateDebugDetail[]>([]);
   const [apiStatus, setApiStatus] = useState<'loading' | 'connected' | 'fallback'>('loading');
   const [pendingImportDraft, setPendingImportDraft] = useState<ImportedBookDraft | null>(null);
   const [pendingOnlineBook, setPendingOnlineBook] = useState<OnlineBook | null>(null);
@@ -106,10 +122,11 @@ export default function App() {
         setApiStatus('connected');
       } catch {
         if (cancelled) return;
-        setShelfBooks([]);
-        setGenerationTasks([]);
-        setSceneImages([]);
-        setSceneCandidates([]);
+        setShelfBooks(mockBooks);
+        setChaptersById(Object.fromEntries(mockChapters.map((chapter) => [chapter.id, chapter])));
+        setGenerationTasks(mockGenerationTasks);
+        setSceneImages(mockSceneImages);
+        setSceneCandidates(mockSceneCandidates);
         setApiStatus('fallback');
       }
     }
@@ -194,12 +211,12 @@ export default function App() {
         const [apiTasks, apiImages, apiCandidates] = await Promise.all([
           fetchGenerationTasks(),
           fetchSceneImages(),
-          fetchSceneCandidates(currentChapter.id),
+          fetchSceneCandidateDetails(currentChapter.id),
         ]);
         if (cancelled) return;
         setGenerationTasks(apiTasks);
         setSceneImages(apiImages);
-        setSceneCandidates(apiCandidates);
+        setSceneCandidates(withDevelopmentDebugFixtures(apiCandidates, currentChapter.id));
         setApiStatus('connected');
       } catch {
         if (cancelled) return;
@@ -423,6 +440,24 @@ export default function App() {
     setPendingOnlineBook(book);
     setStyleError(null);
     navigate({ name: 'Style' });
+  };
+
+  const confirmManualRegeneration = async (
+    candidateId: string,
+    overrideImageType: CanonicalImageType,
+    idempotencyKey: string,
+  ) => {
+    await requestManualRegeneration(candidateId, overrideImageType, idempotencyKey);
+    if (!currentChapter) return;
+    const [apiTasks, apiImages, apiCandidates] = await Promise.all([
+      fetchGenerationTasks(),
+      fetchSceneImages(),
+      fetchSceneCandidateDetails(currentChapter.id),
+    ]);
+    setGenerationTasks(apiTasks);
+    setSceneImages(apiImages);
+    setSceneCandidates(withDevelopmentDebugFixtures(apiCandidates, currentChapter.id));
+    setApiStatus('connected');
   };
 
   const beginFileImport = async () => {
@@ -658,7 +693,12 @@ export default function App() {
           ))}
 
         {route.name === 'SceneDebug' && (
-          <SceneDebugScreen chapter={currentChapter} candidates={sceneCandidates} sceneImages={sceneImages} />
+          <SceneDebugScreen
+            chapter={currentChapter}
+            candidates={sceneCandidates}
+            sceneImages={sceneImages}
+            onConfirmRegeneration={confirmManualRegeneration}
+          />
         )}
         {apiStatus === 'fallback' && (
           <View style={styles.apiBadge}>

@@ -3,16 +3,238 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
+import struct
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
 
-from .types import SceneCandidate
+from .types import GeneratedImageArtifact, ImageGenerationRequest, SceneCandidate
 
 
 DEFAULT_GLM_IMAGE_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/images/generations"
 DEFAULT_GLM_IMAGE_MODEL = "glm-image"
+GLM_LANDSCAPE_SIZE = "1536x1024"
+
+
+def build_glm_payload(request: ImageGenerationRequest) -> dict[str, str]:
+    if request.aspectRatio != "3:2":
+        raise ValueError("Formal GLM requests require 3:2.")
+    return {
+        "model": os.getenv("GLM_IMAGE_MODEL", DEFAULT_GLM_IMAGE_MODEL),
+        "prompt": request.prompt,
+        "size": GLM_LANDSCAPE_SIZE,
+    }
+
+
+def build_pollinations_url(request: ImageGenerationRequest) -> str:
+    if request.aspectRatio != "3:2":
+        raise ValueError("Formal Pollinations requests require 3:2.")
+    return f"https://image.pollinations.ai/prompt/{urllib.parse.quote(request.prompt)}?width=1536&height=1024&nologo=true"
+
+
+@dataclass(frozen=True)
+class _DownloadedImage:
+    data: bytes
+    mime_type: str
+    width: int
+    height: int
+
+
+def _content_type(response: object, default: str) -> str:
+    headers = getattr(response, "headers", {})
+    value = headers.get("Content-Type", default)
+    return str(value).split(";", 1)[0].strip().lower()
+
+
+def _svg_dimension(value: str | None) -> int | None:
+    if value is None:
+        return None
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(?:px)?\s*", value)
+    if not match:
+        return None
+    number = float(match.group(1))
+    return int(number) if number.is_integer() and number > 0 else None
+
+
+def _svg_dimensions(data: bytes) -> tuple[int, int]:
+    try:
+        root = ElementTree.fromstring(data)
+    except (ElementTree.ParseError, UnicodeDecodeError) as error:
+        raise ValueError("Generated SVG bytes could not be parsed.") from error
+    if root.tag.rsplit("}", 1)[-1] != "svg":
+        raise ValueError("Generated SVG root element was not <svg>.")
+    width = _svg_dimension(root.get("width"))
+    height = _svg_dimension(root.get("height"))
+    if width and height:
+        return width, height
+    view_box = root.get("viewBox", "").replace(",", " ").split()
+    if len(view_box) == 4:
+        try:
+            view_width, view_height = float(view_box[2]), float(view_box[3])
+        except ValueError as error:
+            raise ValueError("Generated SVG viewBox dimensions were invalid.") from error
+        if view_width.is_integer() and view_height.is_integer() and view_width > 0 and view_height > 0:
+            return int(view_width), int(view_height)
+    raise ValueError("Generated SVG did not contain positive integer dimensions.")
+
+
+def _jpeg_dimensions(data: bytes) -> tuple[int, int]:
+    if not data.startswith(b"\xff\xd8"):
+        raise ValueError("Generated JPEG bytes did not contain a JPEG header.")
+    offset = 2
+    start_of_frame_markers = {
+        0xC0,
+        0xC1,
+        0xC2,
+        0xC3,
+        0xC5,
+        0xC6,
+        0xC7,
+        0xC9,
+        0xCA,
+        0xCB,
+        0xCD,
+        0xCE,
+        0xCF,
+    }
+    while offset < len(data):
+        while offset < len(data) and data[offset] == 0xFF:
+            offset += 1
+        if offset >= len(data):
+            break
+        marker = data[offset]
+        offset += 1
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            continue
+        if offset + 2 > len(data):
+            break
+        segment_length = int.from_bytes(data[offset : offset + 2], "big")
+        if segment_length < 2 or offset + segment_length > len(data):
+            break
+        if marker in start_of_frame_markers:
+            if segment_length < 7:
+                break
+            height = int.from_bytes(data[offset + 3 : offset + 5], "big")
+            width = int.from_bytes(data[offset + 5 : offset + 7], "big")
+            if width > 0 and height > 0:
+                return width, height
+            break
+        offset += segment_length
+    raise ValueError("Generated JPEG did not contain decodable dimensions.")
+
+
+def _webp_dimensions(data: bytes) -> tuple[int, int]:
+    if len(data) < 30 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
+        raise ValueError("Generated WebP bytes did not contain a WebP header.")
+    chunk = data[12:16]
+    if chunk == b"VP8X":
+        return (
+            1 + int.from_bytes(data[24:27], "little"),
+            1 + int.from_bytes(data[27:30], "little"),
+        )
+    if chunk == b"VP8L" and data[20] == 0x2F:
+        width = 1 + data[21] + ((data[22] & 0x3F) << 8)
+        height = 1 + ((data[22] & 0xC0) >> 6) + (data[23] << 2) + ((data[24] & 0x0F) << 10)
+        return width, height
+    if chunk == b"VP8 " and data[23:26] == b"\x9d\x01\x2a":
+        width = int.from_bytes(data[26:28], "little") & 0x3FFF
+        height = int.from_bytes(data[28:30], "little") & 0x3FFF
+        if width > 0 and height > 0:
+            return width, height
+    raise ValueError("Generated WebP did not contain decodable dimensions.")
+
+
+def decode_image_dimensions(data: bytes, mime_type: str) -> tuple[int, int]:
+    """Read dimensions from provider bytes; never substitute requested dimensions."""
+    normalized_mime = mime_type.lower().split(";", 1)[0].strip()
+    if normalized_mime == "image/svg+xml" or data.lstrip().startswith((b"<svg", b"<?xml")):
+        return _svg_dimensions(data)
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        if len(data) < 24 or data[12:16] != b"IHDR":
+            raise ValueError("Generated PNG did not contain a valid IHDR chunk.")
+        width, height = struct.unpack(">II", data[16:24])
+        if width > 0 and height > 0:
+            return width, height
+    if data.startswith((b"GIF87a", b"GIF89a")) and len(data) >= 10:
+        width, height = struct.unpack("<HH", data[6:10])
+        if width > 0 and height > 0:
+            return width, height
+    if data.startswith(b"\xff\xd8"):
+        return _jpeg_dimensions(data)
+    if data.startswith(b"RIFF"):
+        return _webp_dimensions(data)
+    raise ValueError(
+        f"Generated image dimensions could not be decoded from {normalized_mime or 'unknown MIME'} bytes."
+    )
+
+
+def _actual_dimensions(
+    data: bytes,
+    mime_type: str,
+    metadata_width: object = None,
+    metadata_height: object = None,
+) -> tuple[int, int]:
+    try:
+        decoded = decode_image_dimensions(data, mime_type)
+    except ValueError:
+        if (
+            type(metadata_width) is int
+            and type(metadata_height) is int
+            and metadata_width > 0
+            and metadata_height > 0
+        ):
+            return metadata_width, metadata_height
+        raise
+    if metadata_width is not None or metadata_height is not None:
+        if type(metadata_width) is not int or type(metadata_height) is not int:
+            raise ValueError("Provider image dimension metadata must contain positive integers.")
+        if (metadata_width, metadata_height) != decoded:
+            raise ValueError("Provider image dimension metadata disagreed with decoded image bytes.")
+    return decoded
+
+
+def _require_three_two(width: int, height: int, provider: str) -> None:
+    if width * 2 != height * 3:
+        raise ValueError(
+            f"{provider} returned {width}x{height}; formal images must have a 3:2 aspect ratio."
+        )
+
+
+def generate_formal_image(request: ImageGenerationRequest, provider: str) -> GeneratedImageArtifact:
+    if provider == "heuristic":
+        raise ValueError("Heuristic cannot generate formal images.")
+    _load_local_env()
+    if provider == "mock-svg":
+        data = _svg_preview(request.prompt)
+        mime_type = "image/svg+xml"
+        width, height = decode_image_dimensions(data, mime_type)
+        model = "mock-svg"
+    elif provider == "pollinations":
+        downloaded = _download_formal_pollinations_image(request)
+        data, mime_type = downloaded.data, downloaded.mime_type
+        width, height = downloaded.width, downloaded.height
+        model = "pollinations"
+        _require_three_two(width, height, provider)
+    elif provider == "glm":
+        payload = build_glm_payload(request)
+        downloaded = _download_glm_image(payload)
+        data, mime_type = downloaded.data, downloaded.mime_type
+        width, height = downloaded.width, downloaded.height
+        model = payload["model"]
+        _require_three_two(width, height, provider)
+    else:
+        raise ValueError(f"Unsupported formal provider: {provider}")
+    return GeneratedImageArtifact(
+        imageBase64=base64.b64encode(data).decode("ascii"),
+        mimeType=mime_type,
+        provider=provider,
+        model=model,
+        width=width,
+        height=height,
+    )
 
 
 @dataclass(frozen=True)
@@ -67,6 +289,19 @@ def _download_pollinations_image(prompt: str) -> tuple[bytes, str]:
         return response.read(), content_type
 
 
+def _download_formal_pollinations_image(request: ImageGenerationRequest) -> _DownloadedImage:
+    provider_request = urllib.request.Request(
+        build_pollinations_url(request),
+        headers={"User-Agent": "SceneReaderWorker/0.1"},
+        method="GET",
+    )
+    with urllib.request.urlopen(provider_request, timeout=90) as response:
+        data = response.read()
+        mime_type = _content_type(response, "image/jpeg")
+    width, height = _actual_dimensions(data, mime_type)
+    return _DownloadedImage(data, mime_type, width, height)
+
+
 def _load_local_env() -> None:
     env_path = Path(__file__).resolve().parents[2] / ".env"
     if not env_path.exists():
@@ -90,17 +325,17 @@ def _download_url(url: str) -> tuple[bytes, str]:
         return response.read(), content_type
 
 
-def _download_glm_image(prompt: str) -> tuple[bytes, str]:
+def _download_glm_image(payload: dict[str, str]) -> _DownloadedImage:
     _load_local_env()
     api_key = os.getenv("GLM_API_KEY") or os.getenv("ZHIPU_API_KEY") or os.getenv("BIGMODEL_API_KEY")
     if not api_key:
         raise ValueError("GLM image generation requires GLM_API_KEY, ZHIPU_API_KEY, or BIGMODEL_API_KEY.")
-
-    payload = {
-        "model": os.getenv("GLM_IMAGE_MODEL", DEFAULT_GLM_IMAGE_MODEL),
-        "prompt": prompt,
-        "size": os.getenv("GLM_IMAGE_SIZE", "1024x1024"),
-    }
+    if set(payload) != {"model", "prompt", "size"}:
+        raise ValueError("GLM image payload must contain exactly model, prompt, and size.")
+    if payload["size"] != GLM_LANDSCAPE_SIZE:
+        raise ValueError(f"Formal GLM image size must be {GLM_LANDSCAPE_SIZE}.")
+    if not payload["model"].strip() or not payload["prompt"].strip():
+        raise ValueError("GLM image payload requires a non-empty model and prompt.")
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         os.getenv("GLM_IMAGE_ENDPOINT", DEFAULT_GLM_IMAGE_ENDPOINT),
@@ -114,11 +349,23 @@ def _download_glm_image(prompt: str) -> tuple[bytes, str]:
 
     with urllib.request.urlopen(request, timeout=180) as response:
         response_payload = json.loads(response.read().decode("utf-8"))
-
-    image_url = response_payload.get("data", [{}])[0].get("url")
-    if not image_url:
+    if not isinstance(response_payload, dict):
+        raise ValueError("GLM image response root was not an object.")
+    items = response_payload.get("data")
+    if not isinstance(items, list) or not items or not isinstance(items[0], dict):
+        raise ValueError(f"GLM image response did not include data[0]: {response_payload}")
+    image_item = items[0]
+    image_url = image_item.get("url")
+    if not isinstance(image_url, str) or not image_url.strip():
         raise ValueError(f"GLM image response did not include data[0].url: {response_payload}")
-    return _download_url(image_url)
+    data, mime_type = _download_url(image_url)
+    width, height = _actual_dimensions(
+        data,
+        mime_type,
+        image_item.get("width"),
+        image_item.get("height"),
+    )
+    return _DownloadedImage(data, mime_type, width, height)
 
 
 def target_image_count_for_paragraphs(paragraph_count: int, max_images: int = 3) -> int:
@@ -196,7 +443,14 @@ def generate_images_for_candidates(
         elif image_provider == "pollinations":
             image_bytes, mime_type = _download_pollinations_image(prompt)
         elif image_provider == "glm":
-            image_bytes, mime_type = _download_glm_image(prompt)
+            downloaded = _download_glm_image(
+                {
+                    "model": os.getenv("GLM_IMAGE_MODEL", DEFAULT_GLM_IMAGE_MODEL),
+                    "prompt": prompt,
+                    "size": GLM_LANDSCAPE_SIZE,
+                }
+            )
+            image_bytes, mime_type = downloaded.data, downloaded.mime_type
         else:
             raise ValueError(f"Unsupported IMAGE_PROVIDER: {image_provider}")
 
