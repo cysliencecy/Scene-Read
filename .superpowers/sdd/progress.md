@@ -18,4 +18,4 @@
 
 ## Final Review
 
-- Status: pending — all planned waves have pass receipts; broad spec/code review required before closure
+- Status: retrying — initial broad review failed in `.superpowers/sdd/reviews/final-review.md`; simplified search titles and redirect confinement require repair
