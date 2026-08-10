@@ -75,7 +75,9 @@ function parseAudit(value: unknown): ImageAuditResult {
   if (item.verdict !== 'publishable' && item.verdict !== 'blocked') {
     throw new ApiInputError(API_ERROR_CODES.invalidPayload);
   }
-  if (!Array.isArray(item.rules)) throw new ApiInputError(API_ERROR_CODES.invalidPayload);
+  if (!Array.isArray(item.rules) || item.rules.length === 0) {
+    throw new ApiInputError(API_ERROR_CODES.invalidPayload);
+  }
   const rules = item.rules.map((value) => {
     const rule = record(value);
     if (rule.severity !== 'info' && rule.severity !== 'warning' && rule.severity !== 'severe') {
@@ -88,10 +90,17 @@ function parseAudit(value: unknown): ImageAuditResult {
       explanation: requiredString(rule.explanation),
     };
   });
+  const severeFactConflict = requiredBoolean(item.severeFactConflict);
+  const severe = severeFactConflict
+    || rules.some((rule) => rule.severity === 'severe' && !rule.passed);
+  const expectedVerdict = severe ? 'blocked' : 'publishable';
+  if (item.verdict !== expectedVerdict) {
+    throw new ApiInputError(API_ERROR_CODES.invalidPayload);
+  }
   return {
-    verdict: item.verdict,
+    verdict: expectedVerdict,
     rules,
-    severeFactConflict: requiredBoolean(item.severeFactConflict),
+    severeFactConflict,
     provider: requiredString(item.provider),
     model: requiredString(item.model),
     auditVersion: requiredString(item.auditVersion),

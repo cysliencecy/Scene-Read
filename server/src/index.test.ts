@@ -217,6 +217,11 @@ test('publishable and blocked callbacks reject missing, malformed, or contradict
   const cases: Array<[string, Record<string, unknown>]> = [
     ['audit-less', { ...valid, idempotencyKey: 'invalid-audit-less', audit: undefined }],
     ['artifact-less', { ...valid, idempotencyKey: 'invalid-artifact-less', imageBase64: undefined }],
+    ['empty-rules', {
+      ...valid,
+      idempotencyKey: 'invalid-empty-rules',
+      audit: { ...valid.audit, rules: [] },
+    }],
     ['malformed-rule', {
       ...valid,
       idempotencyKey: 'invalid-malformed-rule',
@@ -242,6 +247,12 @@ test('publishable and blocked callbacks reject missing, malformed, or contradict
       idempotencyKey: 'invalid-blocked-verdict',
       status: 'blocked',
     }],
+    ['blocked-without-severe-basis', {
+      ...valid,
+      idempotencyKey: 'invalid-blocked-without-severe-basis',
+      status: 'blocked',
+      audit: { ...valid.audit, verdict: 'blocked' },
+    }],
     ['blocked-artifact-less', {
       ...valid,
       idempotencyKey: 'invalid-blocked-artifact-less',
@@ -265,6 +276,28 @@ test('publishable and blocked callbacks reject missing, malformed, or contradict
     assert.equal(result.body.error, 'INVALID_PAYLOAD', name);
   }
 
+  const reader = await request('/scene-images');
+  assert.equal((reader.body.data as Array<Record<string, unknown>>)
+    .some((image) => image.candidateId === candidateId), false);
+});
+
+test('blocked callback requires a severe fact conflict or failed severe rule', async () => {
+  const candidateId = 'e2e-invalid-blocked-basis-candidate';
+  await request('/worker/scene-candidates', {
+    method: 'POST', body: JSON.stringify(candidatePayload(candidateId)),
+  });
+  const valid = validAttemptPayload(candidateId, 'invalid-blocked-basis');
+  const result = await request('/worker/image-generation-attempts', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...valid,
+      status: 'blocked',
+      audit: { ...valid.audit, verdict: 'blocked' },
+    }),
+  });
+
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.error, 'INVALID_PAYLOAD');
   const reader = await request('/scene-images');
   assert.equal((reader.body.data as Array<Record<string, unknown>>)
     .some((image) => image.candidateId === candidateId), false);

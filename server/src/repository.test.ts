@@ -101,6 +101,23 @@ test('publishable status alone never creates an empty or unaudited reader projec
   });
 
   assert.equal(await repository.getProjection(candidate.id), null);
+
+  await repository.upsertAttempt({
+    ...completePublishableAttempt,
+    idempotencyKey: 'empty-audit-rules',
+    audit: { ...completePublishableAttempt.audit, rules: [] },
+  });
+
+  assert.equal(await repository.getProjection(candidate.id), null);
+
+  await repository.upsertAttempt({
+    ...completePublishableAttempt,
+    idempotencyKey: 'blocked-without-severe-basis',
+    status: 'blocked',
+    audit: { ...completePublishableAttempt.audit, verdict: 'blocked' },
+  });
+
+  assert.equal(await repository.getProjection(candidate.id), null);
 });
 
 test('profile upserts preserve stable facts and version data', async () => {

@@ -146,7 +146,12 @@ Attempt callbacks are idempotent by `idempotencyKey`. Only `publishable` attempt
   "mimeType": "image/png",
   "audit": {
     "verdict": "blocked",
-    "rules": [],
+    "rules": [{
+      "rule": "fact-consistency",
+      "passed": false,
+      "severity": "severe",
+      "explanation": "The generated landmark conflicts with the source facts."
+    }],
     "severeFactConflict": true,
     "provider": "vision",
     "model": "vision-model",
@@ -184,7 +189,12 @@ $attempt = @{
   imageBase64 = '<base64>'
   mimeType = 'image/png'
   audit = @{
-    verdict = 'publishable'; rules = @(); severeFactConflict = $false
+    verdict = 'publishable'
+    rules = @(@{
+      rule = 'environment-composition'; passed = $true; severity = 'info'
+      explanation = 'The image satisfies the environment composition contract.'
+    })
+    severeFactConflict = $false
     provider = 'vision'; model = 'vision-model'; auditVersion = 'audit-v1'
   }
 } | ConvertTo-Json -Depth 6
