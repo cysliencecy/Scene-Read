@@ -13,5 +13,5 @@
 - W3: complete — commit 5fda785; review pass in `.superpowers/sdd/reviews/w3-review.md`
 - W4: complete — commit 6e73c09; review pass in `.superpowers/sdd/reviews/w4-review.md`
 - W5: complete — commits 38965e8..78f9c3b; replacement review pass in `.superpowers/sdd/reviews/w5-rereview.md`
-- W6: eligible — Batch 6 mobile multi-source flow
+- W6: retrying — initial review failed in `.superpowers/sdd/reviews/w6-review.md`; cross-page book deduplication required
 - W7: blocked on W6 pass
