@@ -2,7 +2,7 @@
 
 - Plan revision: 1
 - Mode: SDD
-- Current wave: W2
+- Current wave: complete
 - Contract approval: DP-3 approved
 - State automation: manual fallback because spec-superflow CLI is unavailable
 
@@ -18,4 +18,10 @@
 
 ## Final Review
 
-- Status: retrying — initial broad review failed in `.superpowers/sdd/reviews/final-review.md`; simplified search titles and redirect confinement require repair
+- Status: complete — initial broad review failed in `.superpowers/sdd/reviews/final-review.md`; focused repair commit `24a4b19` resolved simplified search titles and redirect confinement; replacement broad review passed in `.superpowers/sdd/reviews/final-rereview.md`
+
+## Release Verification
+
+- DP-6: pass — fresh server 37/37, server typecheck/build, mobile focused and regression checks, Worker 9/9, and full-range `git diff --check` all passed
+- DP-7: confirmed — manual-fallback artifacts are complete and the branch is ready for user-directed merge; no push, main merge, remote schema migration, or remote import was performed
+- Spec sync: not applicable in this repository because no top-level `specs/` base or spec-superflow state tooling exists; approved delta specs remain under `changes/wikisource-whole-book-import/specs/`
