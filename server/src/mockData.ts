@@ -1,4 +1,4 @@
-import type { Book, Chapter, GenerationTask, SceneImage } from './types.js';
+import type { Book, Chapter, GenerationTask, SceneCandidate, SceneImage } from './types.js';
 
 export const books: Book[] = [
   {
@@ -116,5 +116,27 @@ export const sceneImages: SceneImage[] = [
     effectiveImageType: 'object',
     variant: 'office',
     prompt: '旧街书店室内，雨夜木门，旧书箱，温暖灯光',
+  },
+];
+
+/** Existing persisted rows used only to exercise non-destructive compatibility reads in mock mode. */
+export const legacySceneCandidates: SceneCandidate[] = [
+  {
+    id: 'legacy-scene-e2e', taskId: 'rain-task-1', bookId: 'rain', chapterId: 'rain-chapter-1',
+    order: 20, sourceBlockId: 'rain-p-1', position: 20, reason: 'Legacy scene',
+    sourceText: 'Legacy source.', promptDraft: 'Legacy prompt.', imageType: 'scene',
+    effectiveImageType: 'environment', confidence: 0.8,
+  },
+  {
+    id: 'legacy-object-e2e', taskId: 'rain-task-1', bookId: 'rain', chapterId: 'rain-chapter-1',
+    order: 21, sourceBlockId: 'rain-p-1', position: 21, reason: 'Legacy object',
+    sourceText: 'Legacy source.', promptDraft: 'Legacy prompt.', imageType: 'object',
+    effectiveImageType: 'object', confidence: 0.8,
+  },
+  {
+    id: 'legacy-character-e2e', taskId: 'rain-task-1', bookId: 'rain', chapterId: 'rain-chapter-1',
+    order: 22, sourceBlockId: 'rain-p-1', position: 22, reason: 'Legacy character',
+    sourceText: 'A figure waits in the rain.', promptDraft: 'Legacy prompt.', imageType: 'character',
+    effectiveImageType: null, confidence: 0.8,
   },
 ];

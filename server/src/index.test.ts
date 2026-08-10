@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const port = 4100 + Math.floor(Math.random() * 500);
@@ -68,6 +67,32 @@ function candidatePayload(id: string, overrides: Record<string, unknown> = {}) {
       sourceText: 'Rain crossed the old bridge.',
       stability: 'stable',
     }],
+  };
+}
+
+function validAttemptPayload(candidateId: string, idempotencyKey: string) {
+  return {
+    idempotencyKey,
+    candidateId,
+    taskId: 'rain-task-1',
+    trigger: 'automatic',
+    requestedType: 'environment',
+    prompt: 'A rain-soaked bridge, landscape 3:2.',
+    status: 'publishable',
+    provider: 'glm',
+    model: 'glm-image',
+    width: 1536,
+    height: 1024,
+    imageBase64: 'reader-artifact',
+    mimeType: 'image/png',
+    audit: {
+      verdict: 'publishable',
+      rules: [{ rule: 'environment-composition', passed: true, severity: 'info', explanation: 'Compliant.' }],
+      severeFactConflict: false,
+      provider: 'vision',
+      model: 'vision-model',
+      auditVersion: 'audit-v1',
+    },
   };
 }
 
@@ -183,6 +208,68 @@ test('eligible callback produces one audited attempt and one published reader pr
   assert.equal(projections[0].imageUrl, 'data:image/png;base64,eligible-reader-artifact');
 });
 
+test('publishable and blocked callbacks reject missing, malformed, or contradictory audit artifacts', async () => {
+  const candidateId = 'e2e-invalid-attempt-candidate';
+  await request('/worker/scene-candidates', {
+    method: 'POST', body: JSON.stringify(candidatePayload(candidateId)),
+  });
+  const valid = validAttemptPayload(candidateId, 'invalid-attempt-base');
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ['audit-less', { ...valid, idempotencyKey: 'invalid-audit-less', audit: undefined }],
+    ['artifact-less', { ...valid, idempotencyKey: 'invalid-artifact-less', imageBase64: undefined }],
+    ['malformed-rule', {
+      ...valid,
+      idempotencyKey: 'invalid-malformed-rule',
+      audit: { ...valid.audit, rules: [{ rule: 'fact', passed: false, severity: 'critical', explanation: 'Invalid severity.' }] },
+    }],
+    ['contradictory-verdict', {
+      ...valid,
+      idempotencyKey: 'invalid-contradictory-verdict',
+      audit: { ...valid.audit, verdict: 'blocked' },
+    }],
+    ['severe-conflict', {
+      ...valid,
+      idempotencyKey: 'invalid-severe-conflict',
+      audit: { ...valid.audit, severeFactConflict: true },
+    }],
+    ['failed-severe-rule', {
+      ...valid,
+      idempotencyKey: 'invalid-failed-severe-rule',
+      audit: { ...valid.audit, rules: [{ rule: 'fact', passed: false, severity: 'severe', explanation: 'Wrong landmark.' }] },
+    }],
+    ['blocked-with-publishable-audit', {
+      ...valid,
+      idempotencyKey: 'invalid-blocked-verdict',
+      status: 'blocked',
+    }],
+    ['blocked-artifact-less', {
+      ...valid,
+      idempotencyKey: 'invalid-blocked-artifact-less',
+      status: 'blocked',
+      imageBase64: undefined,
+      audit: { ...valid.audit, verdict: 'blocked' },
+    }],
+    ['blocked-audit-less', {
+      ...valid,
+      idempotencyKey: 'invalid-blocked-audit-less',
+      status: 'blocked',
+      audit: undefined,
+    }],
+  ];
+
+  for (const [name, payload] of cases) {
+    const result = await request('/worker/image-generation-attempts', {
+      method: 'POST', body: JSON.stringify(payload),
+    });
+    assert.equal(result.response.status, 400, name);
+    assert.equal(result.body.error, 'INVALID_PAYLOAD', name);
+  }
+
+  const reader = await request('/scene-images');
+  assert.equal((reader.body.data as Array<Record<string, unknown>>)
+    .some((image) => image.candidateId === candidateId), false);
+});
+
 test('below-threshold callback remains queryable with no attempt or reader projection', async () => {
   const candidateId = 'e2e-below-threshold-candidate';
   const payload = candidatePayload(candidateId);
@@ -201,9 +288,9 @@ test('below-threshold callback remains queryable with no attempt or reader proje
     .some((image) => image.candidateId === candidateId), false);
 });
 
-test('legacy scene, object, and character candidates retain stored values and compatibility reads', async () => {
+test('formal Worker candidate callback rejects legacy-shaped writes', async () => {
   const legacyTypes = ['scene', 'object', 'character'] as const;
-  await request('/worker/scene-candidates', {
+  const result = await request('/worker/scene-candidates', {
     method: 'POST',
     body: JSON.stringify({
       taskId: 'rain-task-1', bookId: 'rain', chapterId: 'rain-chapter-1',
@@ -215,6 +302,12 @@ test('legacy scene, object, and character candidates retain stored values and co
       generatedImages: [],
     }),
   });
+
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.error, 'INVALID_PAYLOAD');
+});
+
+test('legacy scene, object, and character candidates retain stored values and compatibility reads', async () => {
 
   const debug = await request('/scene-candidates?chapterId=rain-chapter-1&includeAttempts=true');
   const candidates = debug.body.data as Array<Record<string, any>>;
@@ -230,17 +323,6 @@ test('legacy scene, object, and character candidates retain stored values and co
   assert.equal(legacyObject.effectiveImageType, 'object');
   assert.equal(legacyCharacter.imageType, 'character');
   assert.equal(legacyCharacter.effectiveImageType, null);
-});
-
-test('formal task dispatch defaults to the two-stage classifier and GLM without shadow execution', () => {
-  const source = readFileSync(path.resolve('src/index.ts'), 'utf8');
-  const runner = source.slice(source.indexOf('function runWorkerForTask'), source.indexOf('\napp.', source.indexOf('function runWorkerForTask')));
-
-  assert.match(runner, /WORKER_SCENE_PROVIDER\s*\?\?\s*'openai'/);
-  assert.match(runner, /IMAGE_PROVIDER\s*\?\?\s*'glm'/);
-  assert.doesNotMatch(runner, /WORKER_SCENE_PROVIDER\s*\?\?\s*'heuristic'/);
-  assert.doesNotMatch(runner, /IMAGE_PROVIDER\s*\?\?\s*'mock-svg'/);
-  assert.doesNotMatch(runner, /shadow|legacy classifier|generate_images_for_candidates/i);
 });
 
 test('repeated candidate/profile callback returns one candidate and one fact suggestion', async () => {
@@ -293,7 +375,7 @@ test('repeated attempt idempotency key returns the same attempt', async () => {
   const first = await request('/worker/image-generation-attempts', { method: 'POST', body: JSON.stringify(payload) });
   const repeated = await request('/worker/image-generation-attempts', {
     method: 'POST',
-    body: JSON.stringify({ ...payload, status: 'publishable', imageBase64: 'must-not-win', mimeType: 'image/png' }),
+    body: JSON.stringify(payload),
   });
 
   assert.equal(first.response.status, 200);
@@ -315,6 +397,10 @@ test('blocked attempt artifact never appears in reader scene-images', async () =
       requestedType: 'environment',
       prompt: 'Blocked reader prompt',
       status: 'blocked',
+      provider: 'glm',
+      model: 'glm-image',
+      width: 1536,
+      height: 1024,
       imageBase64: 'blocked-reader-artifact',
       mimeType: 'image/png',
       audit: {
@@ -358,10 +444,7 @@ test('manual regeneration requires canonical override and key, links its parent,
   await request('/worker/scene-candidates', { method: 'POST', body: JSON.stringify(candidatePayload(candidateId)) });
   const parent = await request('/worker/image-generation-attempts', {
     method: 'POST',
-    body: JSON.stringify({
-      idempotencyKey: 'manual-parent-key', candidateId, taskId: 'rain-task-1', trigger: 'automatic',
-      requestedType: 'environment', prompt: 'Parent prompt', status: 'publishable',
-    }),
+    body: JSON.stringify(validAttemptPayload(candidateId, 'manual-parent-key')),
   });
 
   const missingOverride = await request(`/scene-candidates/${candidateId}/regenerations`, {
@@ -400,10 +483,7 @@ test('manual command lifecycle preserves immutable queued provenance through ter
   await request('/worker/scene-candidates', { method: 'POST', body: JSON.stringify(candidatePayload(candidateId)) });
   const parent = await request('/worker/image-generation-attempts', {
     method: 'POST',
-    body: JSON.stringify({
-      idempotencyKey: 'manual-lifecycle-parent', candidateId, taskId: 'rain-task-1', trigger: 'automatic',
-      requestedType: 'environment', prompt: 'Original automatic prompt', status: 'publishable',
-    }),
+    body: JSON.stringify(validAttemptPayload(candidateId, 'manual-lifecycle-parent')),
   });
   const command = await request(`/scene-candidates/${candidateId}/regenerations`, {
     method: 'POST',
@@ -425,6 +505,10 @@ test('manual command lifecycle preserves immutable queued provenance through ter
       requestedType: 'interaction',
       prompt: 'Terminal interaction prompt',
       status: 'blocked',
+      provider: 'glm',
+      model: 'glm-image',
+      width: 1536,
+      height: 1024,
       imageBase64: 'manual-blocked-artifact',
       mimeType: 'image/png',
       audit: {
@@ -458,18 +542,7 @@ test('manual command lifecycle preserves immutable queued provenance through ter
 });
 
 test('legacy character regeneration emits reclassification instruction and never assumes portrait', async () => {
-  const candidateId = 'legacy-character-candidate';
-  await request('/worker/scene-candidates', {
-    method: 'POST',
-    body: JSON.stringify({
-      taskId: 'rain-task-1', bookId: 'rain', chapterId: 'rain-chapter-1',
-      candidates: [{
-        id: candidateId, sourceBlockId: 'rain-p-1', position: 1, reason: 'Legacy person image',
-        sourceText: 'A figure waits in the rain.', promptDraft: 'Legacy prompt', imageType: 'character', confidence: 0.8,
-      }],
-      generatedImages: [],
-    }),
-  });
+  const candidateId = 'legacy-character-e2e';
 
   const result = await request(`/scene-candidates/${candidateId}/regenerations`, {
     method: 'POST', body: JSON.stringify({ idempotencyKey: 'legacy-reclassify-key' }),
@@ -502,18 +575,7 @@ test('legacy character reclassification repeated after worker exit returns exist
 
   try {
     await waitForServer(isolatedUrl);
-    const candidateId = 'legacy-character-dispatch-once';
-    await requestAt(isolatedUrl, '/worker/scene-candidates', {
-      method: 'POST',
-      body: JSON.stringify({
-        taskId: 'rain-task-1', bookId: 'rain', chapterId: 'rain-chapter-1',
-        candidates: [{
-          id: candidateId, sourceBlockId: 'rain-p-1', position: 1, reason: 'Legacy person image',
-          sourceText: 'A figure waits in the rain.', promptDraft: 'Legacy prompt', imageType: 'character', confidence: 0.8,
-        }],
-        generatedImages: [],
-      }),
-    });
+    const candidateId = 'legacy-character-e2e';
     const requestBody = { idempotencyKey: 'legacy-dispatch-once-key' };
     const first = await requestAt(isolatedUrl, `/scene-candidates/${candidateId}/regenerations`, {
       method: 'POST', body: JSON.stringify(requestBody),

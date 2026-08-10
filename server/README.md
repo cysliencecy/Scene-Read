@@ -21,20 +21,19 @@ Default URL:
 http://localhost:4000
 ```
 
-When the App submits `POST /chapters/:chapterId/generation-task`, the local API starts one Worker process automatically by default. This is meant for the first local product loop: import a book, stay on the reader page, then wait for the generated scene image to appear.
+When the App submits `POST /chapters/:chapterId/generation-task`, the local API starts one Worker process only when `WORKER_AUTO_RUN=true`. This opt-in supports the local product loop: import a book, stay on the reader page, then wait for the generated scene image to appear.
 
-Worker defaults:
+Formal Worker activation and limits:
 
 ```powershell
-$env:WORKER_SCENE_PROVIDER="openai"
-$env:IMAGE_PROVIDER="glm"
+$env:WORKER_AUTO_RUN="true"
 $env:WORKER_MAX_IMAGES="1"
 $env:VISION_AUDIT_ENDPOINT="https://your-vision-endpoint.example/v1/audit"
 $env:VISION_AUDIT_MODEL="vision-model"
 $env:VISION_AUDIT_VERSION="audit-v1"
 ```
 
-Formal tasks fail closed when Kimi, GLM, or vision-audit configuration is unavailable. `heuristic` and `mock-svg` are explicit local-debug modes, not formal fallbacks. See [`docs/expanded-image-pipeline.md`](../docs/expanded-image-pipeline.md) before migration or activation.
+Formal dispatch is closed unless `WORKER_AUTO_RUN` is exactly `true`, and its arguments are hard-fenced to Kimi classification plus GLM generation. `WORKER_SCENE_PROVIDER`, `IMAGE_PROVIDER`, `heuristic`, and `mock-svg` cannot override a formal task. Formal tasks fail closed when Kimi, GLM, or vision-audit configuration is unavailable. See [`docs/expanded-image-pipeline.md`](../docs/expanded-image-pipeline.md) before migration or activation.
 
 On Windows, the server tries `py -3` by default. If your machine does not have the Python launcher configured, set the Python 3 executable explicitly before running the server:
 
@@ -189,7 +188,7 @@ $attempt = @{
     provider = 'vision'; model = 'vision-model'; auditVersion = 'audit-v1'
   }
 } | ConvertTo-Json -Depth 6
-Invoke-RestMethod -Method Post -Uri 'http://localhost:4001/worker/image-generation-attempts' -ContentType 'application/json' -Body $attempt
+Invoke-RestMethod -Method Post -Uri 'http://localhost:4000/worker/image-generation-attempts' -ContentType 'application/json' -Body $attempt
 ```
 
 ## Scope

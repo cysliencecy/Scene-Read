@@ -38,11 +38,32 @@ const attempt = {
   imageUrl: 'https://example.test/rain.png',
 };
 
+const auditedAttempt = {
+  ...attempt,
+  provider: 'glm',
+  model: 'glm-image',
+  width: 1536,
+  height: 1024,
+  audit: {
+    verdict: 'publishable' as const,
+    rules: [{ rule: 'environment-composition', passed: true, severity: 'info' as const, explanation: 'Compliant.' }],
+    severeFactConflict: false,
+    provider: 'vision',
+    model: 'vision-model',
+    auditVersion: 'audit-v1',
+  },
+};
+
+const completePublishableAttempt = {
+  ...auditedAttempt,
+  artifactMetadata: { mimeType: 'image/png', retainedForDebug: false },
+};
+
 test('duplicate attempt idempotency keys return one logical append-only record', async () => {
   const repository = createInMemoryImageRepository();
   await repository.upsertCandidate(candidate);
 
-  const first = await repository.upsertAttempt(attempt);
+  const first = await repository.upsertAttempt(completePublishableAttempt);
   const repeated = await repository.upsertAttempt({ ...attempt, status: 'blocked' });
 
   assert.equal(repeated.id, first.id);
@@ -57,8 +78,29 @@ test('only publishable attempts update the reader projection', async () => {
   await repository.upsertAttempt({ ...attempt, status: 'blocked' });
   assert.equal(await repository.getProjection(candidate.id), null);
 
-  const published = await repository.upsertAttempt({ ...attempt, idempotencyKey: 'attempt-key-2' });
+  const published = await repository.upsertAttempt({ ...completePublishableAttempt, idempotencyKey: 'attempt-key-2' });
   assert.equal((await repository.getProjection(candidate.id))?.attemptId, published.id);
+});
+
+test('publishable status alone never creates an empty or unaudited reader projection', async () => {
+  const repository = createInMemoryImageRepository();
+  await repository.upsertCandidate(candidate);
+
+  await repository.upsertAttempt({ ...attempt, idempotencyKey: 'unaudited-publishable' });
+
+  assert.equal(await repository.getProjection(candidate.id), null);
+
+  await repository.upsertAttempt({ ...auditedAttempt, idempotencyKey: 'missing-artifact-metadata' });
+
+  assert.equal(await repository.getProjection(candidate.id), null);
+
+  await repository.upsertAttempt({
+    ...completePublishableAttempt,
+    idempotencyKey: 'malformed-internal-audit',
+    audit: { ...completePublishableAttempt.audit, auditVersion: '' },
+  });
+
+  assert.equal(await repository.getProjection(candidate.id), null);
 });
 
 test('profile upserts preserve stable facts and version data', async () => {

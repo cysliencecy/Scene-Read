@@ -9,7 +9,6 @@ import {
   createBook,
   createChapter,
   createGenerationTask,
-  createSceneCandidates,
   dataMode,
   deleteBook,
   findImageGenerationAttemptByKey,
@@ -38,90 +37,13 @@ import {
   parseWorkerCandidateCallback,
 } from './imagePipeline.js';
 import type { SceneCandidate, VisualProfileFact } from './types.js';
+import { buildFormalWorkerArguments, shouldAutoRunWorker } from './workerDispatch.js';
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
-const workerSceneCandidateResults: unknown[] = [];
 const runningTaskIds = new Set<string>();
 const manualReclassificationInstructions = new Map<string, { kind: 'reclassify'; candidateId: string; idempotencyKey: string }>();
 const activeTaskStatuses = new Set(['queued', 'recognizing', 'generating']);
-
-type WorkerCandidatePayload = {
-  id?: string;
-  order?: number;
-  sourceBlockId?: string;
-  position?: number;
-  reason?: string;
-  sourceText?: string;
-  promptDraft?: string;
-  prompt?: string;
-  imageType?: 'scene' | 'character' | 'object';
-  locationChange?: string;
-  confidence?: number;
-};
-
-type WorkerSceneImagePayload = {
-  sourceBlockId?: string;
-  imageType?: 'scene' | 'character' | 'object';
-  prompt?: string;
-  imageUrl?: string;
-  imagePath?: string;
-};
-
-function extractWorkerModelInfo(body: Record<string, unknown>) {
-  const logs = Array.isArray(body.logs) ? body.logs : [];
-  const aiLog = logs.find((item): item is { data?: Record<string, unknown> } => {
-    return Boolean(item && typeof item === 'object' && 'data' in item && (item as { data?: unknown }).data);
-  });
-  const data = aiLog?.data ?? {};
-  return {
-    provider: typeof body.provider === 'string' ? body.provider : typeof data.provider === 'string' ? data.provider : undefined,
-    model: typeof data.model === 'string' ? data.model : undefined,
-    promptVersion: 'scene-v1',
-  };
-}
-
-function findGeneratedPrompt(images: WorkerSceneImagePayload[], candidate: WorkerCandidatePayload) {
-  const matched = images.find((image) => image.sourceBlockId && image.sourceBlockId === candidate.sourceBlockId);
-  return matched?.prompt ?? candidate.promptDraft ?? candidate.prompt;
-}
-
-function listInMemorySceneCandidates(filters: { chapterId?: string; taskId?: string }) {
-  return workerSceneCandidateResults.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const body = item as Record<string, unknown>;
-    const taskId = typeof body.taskId === 'string' ? body.taskId : '';
-    const bookId = typeof body.bookId === 'string' ? body.bookId : undefined;
-    const chapterId = typeof body.chapterId === 'string' ? body.chapterId : '';
-    if (filters.taskId && filters.taskId !== taskId) return [];
-    if (filters.chapterId && filters.chapterId !== chapterId) return [];
-
-    const candidates = Array.isArray(body.candidates) ? (body.candidates as WorkerCandidatePayload[]) : [];
-    const generatedImages = Array.isArray(body.generatedImages) ? (body.generatedImages as WorkerSceneImagePayload[]) : [];
-    const modelInfo = extractWorkerModelInfo(body);
-
-    return candidates.map((candidate, index) => ({
-      id: candidate.id ?? chapterId + '-scene-candidate-' + String(index + 1),
-      taskId,
-      bookId,
-      chapterId,
-      order: candidate.order ?? index,
-      sourceBlockId: candidate.sourceBlockId ?? '',
-      position: candidate.position ?? index,
-      reason: candidate.reason ?? '',
-      sourceText: candidate.sourceText ?? '',
-      promptDraft: candidate.promptDraft ?? candidate.prompt ?? '',
-      finalPrompt: findGeneratedPrompt(generatedImages, candidate),
-      imageType: candidate.imageType ?? 'scene',
-      locationChange: candidate.locationChange,
-      confidence: candidate.confidence ?? 0,
-      provider: modelInfo.provider,
-      model: modelInfo.model,
-      promptVersion: modelInfo.promptVersion,
-      rawResponse: body,
-    }));
-  });
-}
 
 function candidateProfileFacts(candidate: SceneCandidate): VisualProfileFact[] {
   if (!candidate.rawResponse || typeof candidate.rawResponse !== 'object') return [];
@@ -212,7 +134,7 @@ function getWorkerCommand() {
 }
 
 function runWorkerForTask(taskId: string) {
-  if (process.env.WORKER_AUTO_RUN === 'false') return;
+  if (!shouldAutoRunWorker(process.env)) return;
   if (runningTaskIds.has(taskId)) return;
   runningTaskIds.add(taskId);
 
@@ -221,19 +143,12 @@ function runWorkerForTask(taskId: string) {
     command,
     [
       ...args,
-      '-m',
-      'scene_reader_worker',
-      '--task-id',
-      taskId,
-      '--api-url',
-      `http://localhost:${port}`,
-      '--provider',
-      process.env.WORKER_SCENE_PROVIDER ?? 'openai',
-      '--generate-images',
-      '--image-provider',
-      process.env.IMAGE_PROVIDER ?? 'glm',
-      '--max-images',
-      process.env.WORKER_MAX_IMAGES ?? '3',
+      ...buildFormalWorkerArguments({
+        taskId,
+        apiUrl: `http://localhost:${port}`,
+        maxImages: process.env.WORKER_MAX_IMAGES ?? '3',
+        environment: process.env,
+      }),
     ],
     {
       cwd: projectRoot,
@@ -399,15 +314,10 @@ app.get('/scene-candidates', async (request, response, next) => {
     const chapterId = typeof request.query.chapterId === 'string' ? request.query.chapterId : undefined;
     const taskId = typeof request.query.taskId === 'string' ? request.query.taskId : undefined;
     const persistedCandidates = await listSceneCandidates({ chapterId, taskId });
-    const memoryCandidates = persistedCandidates.length > 0 ? [] : listInMemorySceneCandidates({ chapterId, taskId });
-    const imageBackfilledCandidates = persistedCandidates.length > 0 || memoryCandidates.length > 0
+    const imageBackfilledCandidates = persistedCandidates.length > 0
       ? []
       : await listImageBackfilledSceneCandidates({ chapterId, taskId });
-    const candidates = persistedCandidates.length > 0
-        ? persistedCandidates
-        : memoryCandidates.length > 0
-          ? memoryCandidates
-          : imageBackfilledCandidates;
+    const candidates = persistedCandidates.length > 0 ? persistedCandidates : imageBackfilledCandidates;
     const includeAttempts = request.query.includeAttempts === 'true';
     response.json({ data: await Promise.all(candidates.map((candidate) => toDebugDetail(candidate, includeAttempts))) });
   } catch (error) {
@@ -553,69 +463,23 @@ app.get('/scene-images/:imageId', async (request, response, next) => {
 
 app.post('/worker/scene-candidates', async (request, response, next) => {
   try {
-    const body = request.body as Record<string, unknown>;
-    const rawCandidates = Array.isArray(body.candidates) ? body.candidates : [];
-    const isCanonicalCallback = rawCandidates.every((candidate) => (
-      candidate && typeof candidate === 'object' && 'classification' in candidate
-    ));
-    if (isCanonicalCallback) {
-      const callback = parseWorkerCandidateCallback(body);
-      const candidates = await Promise.all(callback.candidates.map((candidate, index) => upsertSceneCandidate({
-        id: candidate.id,
-        taskId: callback.taskId,
-        bookId: callback.bookId,
-        chapterId: callback.chapterId,
-        order: index,
-        sourceBlockId: candidate.sourceBlockId,
-        position: candidate.position,
-        sourceText: candidate.classification.evidence[0]?.sourceText ?? '',
-        promptDraft: candidate.classification.reason,
-        classification: candidate.classification,
-        contractVersion: candidate.contractVersion,
-        profileVersion: candidate.profileVersion,
-        profileFactSuggestions: callback.profileFactSuggestions,
-      })));
-      response.json({ data: await Promise.all(candidates.map((candidate) => toDebugDetail(candidate))) });
-      return;
-    }
-
-    workerSceneCandidateResults.push(request.body);
-    const candidates = Array.isArray(body.candidates) ? (body.candidates as WorkerCandidatePayload[]) : [];
-    const generatedImages = Array.isArray(body.generatedImages) ? (body.generatedImages as WorkerSceneImagePayload[]) : [];
-    const taskId = typeof body.taskId === 'string' ? body.taskId : undefined;
-    const chapterId = typeof body.chapterId === 'string' ? body.chapterId : undefined;
-
-    let persistedCount = 0;
-    if (taskId && chapterId && candidates.length > 0) {
-      const modelInfo = extractWorkerModelInfo(body);
-      const persisted = await createSceneCandidates(
-        candidates.map((candidate, index) => ({
-          id: candidate.id,
-          taskId,
-          bookId: typeof body.bookId === 'string' ? body.bookId : undefined,
-          chapterId,
-          order: candidate.order ?? index,
-          sourceBlockId: candidate.sourceBlockId ?? '',
-          position: candidate.position ?? index,
-          reason: candidate.reason ?? '',
-          sourceText: candidate.sourceText ?? '',
-          promptDraft: candidate.promptDraft ?? candidate.prompt ?? '',
-          finalPrompt: findGeneratedPrompt(generatedImages, candidate),
-          imageType: candidate.imageType ?? 'scene',
-          locationChange: candidate.locationChange,
-          confidence: candidate.confidence ?? 0,
-          provider: modelInfo.provider,
-          model: modelInfo.model,
-          promptVersion: modelInfo.promptVersion,
-          rawResponse: body,
-        })),
-      );
-      persistedCount = persisted.length;
-    }
-
-    response.status(202).json({
-      data: { accepted: true, count: workerSceneCandidateResults.length, persistedCount },
-    });
+    const callback = parseWorkerCandidateCallback(request.body);
+    const candidates = await Promise.all(callback.candidates.map((candidate, index) => upsertSceneCandidate({
+      id: candidate.id,
+      taskId: callback.taskId,
+      bookId: callback.bookId,
+      chapterId: callback.chapterId,
+      order: index,
+      sourceBlockId: candidate.sourceBlockId,
+      position: candidate.position,
+      sourceText: candidate.classification.evidence[0]?.sourceText ?? '',
+      promptDraft: candidate.classification.reason,
+      classification: candidate.classification,
+      contractVersion: candidate.contractVersion,
+      profileVersion: candidate.profileVersion,
+      profileFactSuggestions: callback.profileFactSuggestions,
+    })));
+    response.json({ data: await Promise.all(candidates.map((candidate) => toDebugDetail(candidate))) });
   } catch (error) {
     next(error);
   }
@@ -739,10 +603,6 @@ app.post('/scene-candidates/:candidateId/regenerations', async (request, respons
   } catch (error) {
     next(error);
   }
-});
-
-app.get('/worker/scene-candidates', (_request, response) => {
-  response.json({ data: workerSceneCandidateResults });
 });
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {

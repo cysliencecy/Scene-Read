@@ -60,11 +60,10 @@ GLM_API_KEY=your-glm-or-bigmodel-key
 GLM_IMAGE_MODEL=glm-image
 ```
 
-For App import flow triggered by the server, also put the image provider in `server/.env`, because the server process starts the Worker:
+For App import flow triggered by the Server, configure credentials and audit settings in `server/.env`, because the Server process starts the Worker:
 
 ```text
-IMAGE_PROVIDER=glm
-WORKER_SCENE_PROVIDER=openai
+WORKER_AUTO_RUN=true
 WORKER_MAX_IMAGES=1
 GLM_API_KEY=your-glm-or-bigmodel-key
 GLM_IMAGE_MODEL=glm-image
@@ -72,6 +71,8 @@ VISION_AUDIT_ENDPOINT=https://your-vision-endpoint.example/v1/audit
 VISION_AUDIT_MODEL=vision-model
 VISION_AUDIT_VERSION=audit-v1
 ```
+
+The Server hard-fences formal tasks to Kimi classification and GLM generation. `WORKER_SCENE_PROVIDER` and `IMAGE_PROVIDER` are used only by standalone/local-debug Worker commands and cannot override formal Server dispatch.
 
 Formal GLM requests always use the code-owned supported landscape size `1536x1024`;
 there is no runtime size override.
@@ -124,7 +125,7 @@ python -m scene_reader_worker --input samples/chapter-input.json --output .tmp/s
 Run the formal two-stage pipeline against a local API task. This posts canonical candidates and attempt callbacks to their dedicated endpoints:
 
 ```powershell
-python -m scene_reader_worker --task-id task-1 --api-url http://localhost:4001 --provider openai --generate-images --image-provider glm --max-images 1
+python -m scene_reader_worker --task-id task-1 --api-url http://localhost:4000 --provider openai --generate-images --image-provider glm --max-images 1
 ```
 
 Generate one image and include it in the output:

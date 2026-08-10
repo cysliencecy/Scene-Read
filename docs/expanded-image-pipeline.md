@@ -15,7 +15,7 @@ POST /worker/image-generation-attempts
 PATCH /worker/tasks/:taskId
 ```
 
-The formal task runner defaults to `--provider openai --image-provider glm`. `heuristic`, `mock-svg`, and `generate_images_for_candidates(...)` are compatibility or local-debug facilities and are not formal generation routes. There is no shadow invocation.
+The formal task runner hard-codes `--provider openai --image-provider glm` and ignores hostile debug-provider environment values. `heuristic`, `mock-svg`, and `generate_images_for_candidates(...)` are compatibility or local-debug facilities and are not reachable from formal generation routes. There is no shadow invocation.
 
 ## Required environment
 
@@ -23,7 +23,6 @@ Configure the Server process, which passes its environment to the Worker:
 
 ```text
 WORKER_AUTO_RUN=true
-WORKER_SCENE_PROVIDER=openai
 WORKER_MAX_IMAGES=3
 
 KIMI_API_KEY=<secret>
@@ -31,7 +30,6 @@ AI_MODEL=kimi-k3
 AI_BASE_URL=https://api.kimi.com/coding
 AI_PROVIDER=anthropic
 
-IMAGE_PROVIDER=glm
 GLM_API_KEY=<secret>
 GLM_IMAGE_MODEL=glm-image
 
@@ -44,6 +42,8 @@ SUPABASE_SECRET_KEY=<server-side secret>
 ```
 
 Do not commit credentials. Formal GLM generation uses the code-owned `1536x1024` landscape size; no runtime size override is needed. A missing audit configuration fails the attempt closed.
+
+`WORKER_SCENE_PROVIDER` and `IMAGE_PROVIDER` are standalone Worker/local-debug settings only. The Server's formal dispatcher does not consume them. Automatic formal dispatch is closed unless `WORKER_AUTO_RUN` is exactly `true`.
 
 ## Migration and pre-cutover verification
 

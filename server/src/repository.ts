@@ -2,6 +2,7 @@ import {
   books as mockBooks,
   chapters as mockChapters,
   generationTasks as mockGenerationTasks,
+  legacySceneCandidates as mockLegacySceneCandidates,
   sceneImages as mockSceneImages,
 } from './mockData.js';
 import { isSupabaseConfigured, supabase } from './supabaseClient.js';
@@ -29,9 +30,6 @@ type SceneImageInput = Partial<SceneImage> &
     imageBase64?: string;
     mimeType?: string;
   };
-type SceneCandidateInput = Partial<SceneCandidate> &
-  Pick<SceneCandidate, 'taskId' | 'chapterId' | 'sourceBlockId' | 'sourceText' | 'promptDraft'>;
-
 export type PersistedCandidateInput = {
   id: string;
   taskId: string;
@@ -359,7 +357,7 @@ export function createInMemoryImageRepository(options: { legacyImages?: SceneIma
 
 const apiMemoryRepository = createInMemoryImageRepository();
 const apiMemoryTasks = new Map(mockGenerationTasks.map((task) => [task.id, { ...task }]));
-const apiLegacyCandidates = new Map<string, SceneCandidate>();
+const apiLegacyCandidates = new Map(mockLegacySceneCandidates.map((candidate) => [candidate.id, { ...candidate }]));
 
 
 const requireSupabase = () => {
@@ -629,68 +627,6 @@ export async function listSceneCandidates(filters: { chapterId?: string; taskId?
   if (error) {
     if (isMissingSceneCandidateTableError(error)) return [];
     throw error;
-  }
-  return data.map(toSceneCandidate);
-}
-
-export async function createSceneCandidates(inputs: SceneCandidateInput[]): Promise<SceneCandidate[]> {
-  if (inputs.length === 0) return [];
-  if (!supabase) {
-    return inputs.map((input, index) => {
-      const candidate: SceneCandidate = {
-      id: input.id ?? createId('scene-candidate'),
-      taskId: input.taskId,
-      bookId: input.bookId,
-      chapterId: input.chapterId,
-      order: input.order ?? index,
-      sourceBlockId: input.sourceBlockId,
-      position: input.position ?? index,
-      reason: input.reason ?? '',
-      sourceText: input.sourceText,
-      promptDraft: input.promptDraft,
-      finalPrompt: input.finalPrompt,
-      imageType: input.imageType ?? 'scene',
-      effectiveImageType: effectiveImageType(input.imageType ?? 'scene'),
-      locationChange: input.locationChange,
-      confidence: input.confidence ?? 0,
-      provider: input.provider,
-      model: input.model,
-      promptVersion: input.promptVersion,
-      rawResponse: input.rawResponse,
-      };
-      apiLegacyCandidates.set(candidate.id, candidate);
-      return candidate;
-    });
-  }
-
-  const payload = inputs.map((input, index) => ({
-    id: input.id ?? createId('scene-candidate'),
-    task_id: input.taskId,
-    book_id: input.bookId ?? null,
-    chapter_id: input.chapterId,
-    candidate_order: input.order ?? index,
-    source_block_id: input.sourceBlockId,
-    position: input.position ?? index,
-    reason: input.reason ?? '',
-    source_text: input.sourceText,
-    prompt_draft: input.promptDraft,
-    final_prompt: input.finalPrompt ?? null,
-    image_type: input.imageType ? validateCanonicalImageTypeForWrite(input.imageType) : 'environment',
-    location_change: input.locationChange ?? null,
-    confidence: input.confidence ?? 0,
-    provider: input.provider ?? null,
-    model: input.model ?? null,
-    prompt_version: input.promptVersion ?? 'scene-v1',
-    raw_response: input.rawResponse ?? null,
-  }));
-
-  const { data, error } = await supabase.from('scene_candidates').upsert(payload).select('*');
-  if (error) {
-    if (isMissingSceneCandidateTableError(error)) return [];
-    const legacyPayload = payload.map(({ image_type: _imageType, ...item }) => item);
-    const legacyResult = await supabase.from('scene_candidates').upsert(legacyPayload).select('*');
-    if (legacyResult.error) throw error;
-    return legacyResult.data.map(toSceneCandidate);
   }
   return data.map(toSceneCandidate);
 }
