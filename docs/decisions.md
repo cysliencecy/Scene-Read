@@ -65,3 +65,21 @@
 决策：通过后端 Gutendex provider 搜索 Project Gutenberg，由后端下载并解析 EPUB/TXT，完整持久化后才导入书架。App 不直连或抓取书源文件。
 
 理由：Gutendex 提供稳定的搜索和元数据接口，Project Gutenberg 提供可追溯的书籍页面与下载格式；云端统一处理便于去重、格式标准化、下载限制和版权状态留存。
+
+## 2026-08-10：V6 第二个在线书源使用中文维基文库
+
+决策：通过统一 `OnlineBookProvider` 边界并行搜索中文维基文库与 Project Gutenberg。中文维基文库只调用官方 `https://zh.wikisource.org/w/api.php`；单个书源失败时保留其它书源结果并返回 `sourceErrors`，全部书源失败时才中止搜索。
+
+理由：中文维基文库提供可追溯的中文公开或授权作品及官方 MediaWiki API。书源差异收敛在服务端 provider 内，可以避免 App 直接抓取页面，并让后续合法书源沿用相同搜索、错误和导入协议。
+
+## 2026-08-10：维基文库按根作品直接子页执行整本原子导入
+
+决策：`sourceBookId` 使用作品根页面 pageid。导入只接受主命名空间、可识别且没有更深 `/` 层级的直接章节子页；完成章节发现、自然排序、正文提取和规模校验后，才通过单个 Supabase RPC 写入整本书。
+
+理由：根 pageid 比标题稳定，直接子页规则可测试且可解释；先完整校验、后单事务持久化可以避免网络或解析失败留下半本书。非标准页面结构后续以独立规则扩展，不在本批猜测递归关系。
+
+## 2026-08-10：维基文库正文使用 `zh-hans` 并保留来源归属
+
+决策：正文通过 MediaWiki TextExtracts 的 `variant=zh-hans` 获取，保存为现有段落模型。导入书籍标记为 `authorized`，同时保存规范来源 URL 和 `source_attribution`；不统一宣称所有作品均为公版。
+
+理由：官方语言变体能稳定提供简体正文；作品、翻译和版本的具体许可可能不同，因此必须保留来源页作为最终许可依据。远程 Supabase 必须先执行最新 schema，具备 `source_attribution` 列和新版 `import_online_book` RPC 后才能导入。
