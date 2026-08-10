@@ -14,6 +14,7 @@ create table if not exists public.books (
   source text,
   source_book_id text,
   source_url text,
+  source_attribution text,
   copyright_status text check (copyright_status in ('public_domain', 'authorized', 'unknown')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -33,6 +34,7 @@ alter table public.books add column if not exists cover_path text;
 alter table public.books add column if not exists source text;
 alter table public.books add column if not exists source_book_id text;
 alter table public.books add column if not exists source_url text;
+alter table public.books add column if not exists source_attribution text;
 alter table public.books add column if not exists copyright_status text;
 alter table public.books drop constraint if exists books_copyright_status_check;
 alter table public.books
@@ -51,6 +53,12 @@ create table if not exists public.chapters (
   updated_at timestamptz not null default now()
 );
 
+-- Replace the legacy 11-argument overload. The new trailing default keeps old
+-- Gutenberg callers valid while avoiding ambiguous PostgREST RPC resolution.
+drop function if exists public.import_online_book(
+  text[], text, jsonb, text, text, text[], text, text, text, text, text
+);
+
 create or replace function public.import_online_book(
   p_authors text[],
   p_book_id text,
@@ -62,7 +70,8 @@ create or replace function public.import_online_book(
   p_source_book_id text,
   p_source_url text,
   p_title text,
-  p_visual_style text
+  p_visual_style text,
+  p_source_attribution text default null
 )
 returns public.books
 language plpgsql
@@ -71,24 +80,16 @@ declare
   imported_book public.books;
   chapter jsonb;
 begin
-  select * into imported_book
-  from public.books
-  where source = p_source and source_book_id = p_source_book_id;
-
-  if found then
-    return imported_book;
-  end if;
-
   if jsonb_array_length(p_chapters) = 0 then
     raise exception 'ONLINE_BOOK_HAS_NO_CHAPTERS';
   end if;
 
   insert into public.books (
     id, title, progress, accent, current_chapter_id, last_read_label, visual_style,
-    authors, languages, cover_path, source, source_book_id, source_url, copyright_status
+    authors, languages, cover_path, source, source_book_id, source_url, source_attribution, copyright_status
   ) values (
     p_book_id, p_title, '新导入', '#426f76', p_chapters->0->>'id', '准备开始第一章', p_visual_style,
-    p_authors, p_languages, p_cover_path, p_source, p_source_book_id, p_source_url, p_copyright_status
+    p_authors, p_languages, p_cover_path, p_source, p_source_book_id, p_source_url, p_source_attribution, p_copyright_status
   ) returning * into imported_book;
 
   for chapter in select value from jsonb_array_elements(p_chapters)

@@ -23,6 +23,7 @@ export type Database = {
           source: string | null;
           source_book_id: string | null;
           source_url: string | null;
+          source_attribution: string | null;
           copyright_status: 'public_domain' | 'authorized' | 'unknown' | null;
           created_at: string;
           updated_at: string;
@@ -41,6 +42,7 @@ export type Database = {
           source?: string | null;
           source_book_id?: string | null;
           source_url?: string | null;
+          source_attribution?: string | null;
           copyright_status?: 'public_domain' | 'authorized' | 'unknown' | null;
         };
         Update: {
@@ -57,6 +59,7 @@ export type Database = {
           source?: string | null;
           source_book_id?: string | null;
           source_url?: string | null;
+          source_attribution?: string | null;
           copyright_status?: 'public_domain' | 'authorized' | 'unknown' | null;
         };
         Relationships: [];
@@ -245,6 +248,7 @@ export type Database = {
           p_source: string;
           p_source_book_id: string;
           p_source_url: string;
+          p_source_attribution?: string | null;
           p_title: string;
           p_visual_style: string;
         };

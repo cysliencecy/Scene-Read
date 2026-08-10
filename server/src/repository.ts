@@ -31,7 +31,7 @@ const getPublicStorageUrl = (bucket: string, path: string | null | undefined): s
   return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
 };
 
-const toBook = (row: BookRow): Book => ({
+export const mapBookRow = (row: BookRow): Book => ({
   id: row.id,
   title: row.title,
   progress: row.progress,
@@ -42,9 +42,10 @@ const toBook = (row: BookRow): Book => ({
   authors: row.authors,
   languages: row.languages,
   coverUrl: getPublicStorageUrl('book-covers', row.cover_path),
-  source: row.source === 'gutenberg' ? row.source : undefined,
+  source: row.source === 'gutenberg' || row.source === 'wikisource' ? row.source : undefined,
   sourceBookId: row.source_book_id ?? undefined,
   sourceUrl: row.source_url ?? undefined,
+  sourceAttribution: row.source_attribution ?? undefined,
   copyrightStatus: row.copyright_status ?? undefined,
 });
 
@@ -189,7 +190,7 @@ export async function listBooks(): Promise<Book[]> {
 
   const { data, error } = await supabase.from('books').select('*').order('updated_at', { ascending: false });
   if (error) throw error;
-  return data.map(toBook);
+  return data.map(mapBookRow);
 }
 
 export async function getBook(bookId: string): Promise<Book | null> {
@@ -199,7 +200,7 @@ export async function getBook(bookId: string): Promise<Book | null> {
 
   const { data, error } = await supabase.from('books').select('*').eq('id', bookId).maybeSingle();
   if (error) throw error;
-  return data ? toBook(data) : null;
+  return data ? mapBookRow(data) : null;
 }
 
 export async function deleteBook(bookId: string): Promise<boolean> {
@@ -247,13 +248,14 @@ export async function createBook(input: BookInput): Promise<Book> {
       source: input.source ?? null,
       source_book_id: input.sourceBookId ?? null,
       source_url: input.sourceUrl ?? null,
+      source_attribution: input.sourceAttribution ?? null,
       copyright_status: input.copyrightStatus ?? null,
     })
     .select('*')
     .single();
 
   if (error) throw error;
-  return toBook(data);
+  return mapBookRow(data);
 }
 
 export async function findBookBySource(source: string, sourceBookId: string): Promise<Book | null> {
@@ -265,7 +267,7 @@ export async function findBookBySource(source: string, sourceBookId: string): Pr
     .eq('source_book_id', sourceBookId)
     .maybeSingle();
   if (error) throw error;
-  return data ? toBook(data) : null;
+  return data ? mapBookRow(data) : null;
 }
 
 export async function findImportedBookIds(source: string, sourceBookIds: string[]) {
@@ -295,34 +297,39 @@ export async function removeBookCover(path: string) {
   if (error) console.warn(`Failed to remove book cover ${path}: ${error.message}`);
 }
 
-export async function importOnlineBook(input: {
+export type ImportOnlineBookInput = {
   book: Book;
   coverPath: string | null;
   chapters: Chapter[];
-}): Promise<Book> {
+};
+
+export const buildImportOnlineBookRpcArgs = (input: ImportOnlineBookInput) => ({
+  p_authors: input.book.authors ?? [],
+  p_book_id: input.book.id,
+  p_chapters: input.chapters.map((chapter) => ({
+    id: chapter.id,
+    title: chapter.title,
+    progress: chapter.progress,
+    blocks: chapter.blocks,
+  })) as Json,
+  p_copyright_status: input.book.copyrightStatus ?? 'unknown',
+  p_cover_path: input.coverPath,
+  p_languages: input.book.languages ?? [],
+  p_source: input.book.source ?? 'gutenberg',
+  p_source_book_id: input.book.sourceBookId ?? '',
+  p_source_url: input.book.sourceUrl ?? '',
+  p_source_attribution: input.book.sourceAttribution ?? null,
+  p_title: input.book.title,
+  p_visual_style: input.book.visualStyle ?? '写实',
+});
+
+export async function importOnlineBook(input: ImportOnlineBookInput): Promise<Book> {
   const client = requireSupabase();
-  const { data, error } = await client.rpc('import_online_book', {
-    p_authors: input.book.authors ?? [],
-    p_book_id: input.book.id,
-    p_chapters: input.chapters.map((chapter) => ({
-      id: chapter.id,
-      title: chapter.title,
-      progress: chapter.progress,
-      blocks: chapter.blocks,
-    })) as Json,
-    p_copyright_status: input.book.copyrightStatus ?? 'unknown',
-    p_cover_path: input.coverPath,
-    p_languages: input.book.languages ?? [],
-    p_source: input.book.source ?? 'gutenberg',
-    p_source_book_id: input.book.sourceBookId ?? '',
-    p_source_url: input.book.sourceUrl ?? '',
-    p_title: input.book.title,
-    p_visual_style: input.book.visualStyle ?? '写实',
-  });
+  const { data, error } = await client.rpc('import_online_book', buildImportOnlineBookRpcArgs(input));
   if (error) throw error;
   const row = (Array.isArray(data) ? data[0] : data) as BookRow | undefined;
   if (!row) throw new Error('ONLINE_BOOK_IMPORT_RETURNED_NO_BOOK');
-  return toBook(row);
+  return mapBookRow(row);
 }
 
 export async function listChaptersByBook(bookId: string): Promise<Chapter[]> {

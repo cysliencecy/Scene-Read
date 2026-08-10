@@ -22,12 +22,14 @@ import {
 import { isSupabaseConfigured } from './supabaseClient.js';
 import type { Book, Chapter, OnlineBookImportResult, OnlineBookSearchPage, VisualStyle } from './types.js';
 import {
+  createWikisourceProvider,
   discoverWikisourceChapters,
   fetchWikisourceChapterContents,
   resolveWikisourceRoot,
   WIKISOURCE_SOURCE_ATTRIBUTION,
 } from './wikisource.js';
 import type { WikisourceClientOptions } from './wikisource.js';
+import type { ImportOnlineBookInput } from './repository.js';
 
 const sourcePriority = { wikisource: 0, gutenberg: 1 } as const;
 const MAX_WIKISOURCE_BODY_BYTES = 20 * 1024 * 1024;
@@ -163,6 +165,78 @@ export async function prepareWikisourceImport(
   return { book, chapters };
 }
 
+export type WikisourceImportDependencies = {
+  isPersistenceConfigured: boolean;
+  findBookBySource: (source: string, sourceBookId: string) => Promise<Book | null>;
+  listChaptersByBook: (bookId: string) => Promise<Chapter[]>;
+  prepareWikisourceImport: typeof prepareWikisourceImport;
+  persistOnlineBook: (input: ImportOnlineBookInput) => Promise<Book>;
+};
+
+const defaultWikisourceImportDependencies: WikisourceImportDependencies = {
+  isPersistenceConfigured: isSupabaseConfigured,
+  findBookBySource,
+  listChaptersByBook,
+  prepareWikisourceImport,
+  persistOnlineBook,
+};
+
+export async function importWikisourceBook(
+  sourceBookId: string,
+  visualStyle: VisualStyle,
+  options: WikisourceClientOptions = {},
+  dependencies: WikisourceImportDependencies = defaultWikisourceImportDependencies,
+): Promise<OnlineBookImportResult> {
+  if (!dependencies.isPersistenceConfigured) throw new OnlineBookError('SUPABASE_NOT_CONFIGURED', 503);
+  if (!/^\d+$/u.test(sourceBookId)) throw new OnlineBookError('INVALID_SOURCE_BOOK_ID', 400);
+  const numericSourceBookId = Number.parseInt(sourceBookId, 10);
+  if (!Number.isSafeInteger(numericSourceBookId)) throw new OnlineBookError('INVALID_SOURCE_BOOK_ID', 400);
+  const normalizedSourceBookId = String(numericSourceBookId);
+
+  const existing = await dependencies.findBookBySource('wikisource', normalizedSourceBookId);
+  if (existing) {
+    return {
+      book: existing,
+      chapters: await dependencies.listChaptersByBook(existing.id),
+      alreadyImported: true,
+    };
+  }
+
+  const prepared = await dependencies.prepareWikisourceImport(normalizedSourceBookId, visualStyle, options);
+  try {
+    const book = await dependencies.persistOnlineBook({ ...prepared, coverPath: null });
+    return {
+      book,
+      chapters: await dependencies.listChaptersByBook(book.id),
+      alreadyImported: false,
+    };
+  } catch (error) {
+    const racedExisting = await dependencies.findBookBySource('wikisource', normalizedSourceBookId).catch(() => null);
+    if (racedExisting) {
+      return {
+        book: racedExisting,
+        chapters: await dependencies.listChaptersByBook(racedExisting.id),
+        alreadyImported: true,
+      };
+    }
+    throw error;
+  }
+}
+
+export async function importOnlineBookBySource(
+  source: string,
+  sourceBookId: string,
+  visualStyle: VisualStyle,
+  registry: OnlineBookProviderRegistry = onlineBookProviderRegistry,
+) {
+  if (source !== 'gutenberg' && source !== 'wikisource') {
+    throw new OnlineBookError('INVALID_ONLINE_BOOK', 400);
+  }
+  const provider = registry.get(source);
+  if (!provider) throw new OnlineBookError('INVALID_ONLINE_BOOK', 400);
+  return provider.importBook(sourceBookId, visualStyle);
+}
+
 export async function importGutendexBook(
   sourceBookId: string,
   visualStyle: VisualStyle,
@@ -235,3 +309,4 @@ export async function importGutendexBook(
 }
 
 onlineBookProviderRegistry.register(createGutendexProvider(importGutendexBook));
+onlineBookProviderRegistry.register(createWikisourceProvider(importWikisourceBook));

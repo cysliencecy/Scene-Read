@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OnlineBookError } from './gutendex.js';
-import { importGutendexBook, searchOnlineBooks } from './onlineBookService.js';
+import { importOnlineBookBySource, searchOnlineBooks } from './onlineBookService.js';
 import {
   createBook,
   createChapter,
@@ -27,7 +27,7 @@ import {
   updateGenerationTask,
 } from './repository.js';
 
-const app = express();
+export const app = express();
 const port = Number(process.env.PORT ?? 4000);
 const workerSceneCandidateResults: unknown[] = [];
 const runningTaskIds = new Set<string>();
@@ -247,7 +247,7 @@ app.post('/online-books/import', async (request, response, next) => {
     const source = request.body?.source;
     const sourceBookId = request.body?.sourceBookId;
     const visualStyle = request.body?.visualStyle;
-    if (source !== 'gutenberg' || typeof sourceBookId !== 'string') {
+    if ((source !== 'gutenberg' && source !== 'wikisource') || typeof sourceBookId !== 'string') {
       response.status(400).json({ error: 'INVALID_ONLINE_BOOK' });
       return;
     }
@@ -255,7 +255,7 @@ app.post('/online-books/import', async (request, response, next) => {
       response.status(400).json({ error: 'INVALID_VISUAL_STYLE' });
       return;
     }
-    response.status(201).json({ data: await importGutendexBook(sourceBookId, visualStyle) });
+    response.status(201).json({ data: await importOnlineBookBySource(source, sourceBookId, visualStyle) });
   } catch (error) {
     next(error);
   }
@@ -623,6 +623,8 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
   });
 });
 
-app.listen(port, () => {
-  console.log(`SceneReader API listening on http://localhost:${port} (${dataMode})`);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  app.listen(port, () => {
+    console.log(`SceneReader API listening on http://localhost:${port} (${dataMode})`);
+  });
+}

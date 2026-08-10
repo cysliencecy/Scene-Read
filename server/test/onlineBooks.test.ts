@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import JSZip from 'jszip';
 import {
@@ -8,6 +9,8 @@ import {
   searchGutendex,
 } from '../src/gutendex.js';
 import { parseOnlineEpub, parseOnlineText, stripGutenbergBoilerplate } from '../src/onlineBookParser.js';
+import { buildImportOnlineBookRpcArgs, mapBookRow } from '../src/repository.js';
+import type { Database } from '../src/supabaseClient.js';
 import type { OnlineBookImportResult } from '../src/types.js';
 
 test('normalizes Gutendex metadata without flattening authors', () => {
@@ -148,4 +151,85 @@ test('parses EPUB reading headings while ignoring nav and cover documents', asyn
   assert.deepEqual(chapters[0].paragraphs, ['Why this book exists.']);
   assert.equal(chapters[1].title, 'Chapter One');
   assert.deepEqual(chapters[1].paragraphs, ['Chapter One', 'Hello & welcome.', 'Next line.']);
+});
+
+test('maps Wikisource source attribution from a Supabase book row', () => {
+  const row: Database['public']['Tables']['books']['Row'] = {
+    id: 'import-wikisource-7683',
+    title: '红楼梦',
+    progress: '新导入',
+    accent: '#426f76',
+    current_chapter_id: 'import-wikisource-7683-chapter-1',
+    last_read_label: '准备开始第一章',
+    visual_style: '插画',
+    authors: [],
+    languages: ['zh'],
+    cover_path: null,
+    source: 'wikisource',
+    source_book_id: '7683',
+    source_url: 'https://zh.wikisource.org/wiki/%E7%B4%85%E6%A8%93%E5%A4%A2',
+    source_attribution: '来源：中文维基文库；作品版权与许可状态以来源页标注为准',
+    copyright_status: 'authorized',
+    created_at: '2026-08-10T00:00:00.000Z',
+    updated_at: '2026-08-10T00:00:00.000Z',
+  };
+
+  const book = mapBookRow(row);
+
+  assert.equal(book.source, 'wikisource');
+  assert.equal(book.sourceBookId, '7683');
+  assert.equal(book.sourceUrl, row.source_url);
+  assert.equal(book.sourceAttribution, row.source_attribution);
+  assert.equal(book.copyrightStatus, 'authorized');
+});
+
+test('builds atomic RPC arguments with attribution while keeping Gutenberg null-compatible', () => {
+  const wikibook = preparedRpcBook('wikisource', '来源：中文维基文库');
+  const wikiArgs = buildImportOnlineBookRpcArgs({ ...wikibook, coverPath: null });
+  assert.equal(wikiArgs.p_source, 'wikisource');
+  assert.equal(wikiArgs.p_source_attribution, '来源：中文维基文库');
+  assert.equal((wikiArgs.p_chapters as unknown[]).length, 1);
+
+  const gutenberg = preparedRpcBook('gutenberg', undefined);
+  const gutenbergArgs = buildImportOnlineBookRpcArgs({ ...gutenberg, coverPath: null });
+  assert.equal(gutenbergArgs.p_source, 'gutenberg');
+  assert.equal(gutenbergArgs.p_source_attribution, null);
+});
+
+test('schema keeps one atomic import function and adds nullable source attribution', () => {
+  const schema = readFileSync(new URL('../../supabase/schema.sql', import.meta.url), 'utf8');
+  assert.match(schema, /source_attribution\s+text/u);
+  assert.match(schema, /alter table public\.books add column if not exists source_attribution text/u);
+  assert.match(schema, /drop function if exists public\.import_online_book/u);
+  assert.match(schema, /p_source_attribution\s+text\s+default\s+null/u);
+  const functionBody = schema.match(/create or replace function public\.import_online_book[\s\S]*?\$\$;/u)?.[0] ?? '';
+  assert.match(functionBody, /insert into public\.books/u);
+  assert.match(functionBody, /insert into public\.chapters/u);
+  assert.match(functionBody, /source_attribution/u);
+});
+
+const preparedRpcBook = (source: 'gutenberg' | 'wikisource', sourceAttribution: string | undefined) => ({
+  book: {
+    id: `import-${source}-1`,
+    title: 'Test Book',
+    progress: '新导入',
+    accent: '#426f76',
+    currentChapterId: `import-${source}-1-chapter-1`,
+    lastReadLabel: '准备开始第一章',
+    visualStyle: '写实' as const,
+    authors: [],
+    languages: ['zh'],
+    source,
+    sourceBookId: '1',
+    sourceUrl: `https://example.test/${source}/1`,
+    sourceAttribution,
+    copyrightStatus: source === 'wikisource' ? 'authorized' as const : 'public_domain' as const,
+  },
+  chapters: [{
+    id: `import-${source}-1-chapter-1`,
+    bookId: `import-${source}-1`,
+    title: 'Chapter 1',
+    progress: 0,
+    blocks: [{ id: `import-${source}-1-chapter-1-p-1`, type: 'paragraph' as const, text: 'Body' }],
+  }],
 });
