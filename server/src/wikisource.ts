@@ -5,6 +5,7 @@ import type { OnlineBookSearchPage } from './types.js';
 const DEFAULT_WIKISOURCE_API_URL = 'https://zh.wikisource.org/w/api.php';
 const WIKISOURCE_HOSTNAME = 'zh.wikisource.org';
 const SEARCH_PAGE_SIZE = 20;
+const MAX_CHAPTERS = 200;
 const REQUEST_TIMEOUT_MS = 15_000;
 const SOURCE_ATTRIBUTION = '来源：中文维基文库；作品版权与许可状态以来源页标注为准';
 
@@ -40,6 +41,26 @@ type MediaWikiRootResponse = {
   query?: {
     pages?: MediaWikiPage[];
   };
+};
+
+type MediaWikiAllPagesResponse = {
+  continue?: { apcontinue?: string };
+  query?: {
+    allpages?: MediaWikiPage[];
+  };
+};
+
+export type WikisourceChapterDescriptor = {
+  pageId: number;
+  sourceTitle: string;
+  displayTitle: string;
+  order: number;
+};
+
+type ClassifiedChapter = Omit<WikisourceChapterDescriptor, 'order'> & {
+  category: number;
+  sequence: number;
+  normalizedTitle: string;
 };
 
 export function validateWikisourceApiUrl(value: string) {
@@ -129,6 +150,152 @@ function canonicalPageUrl(page: MediaWikiPage) {
   }
   const title = page.title?.trim().replaceAll(' ', '_') ?? '';
   return `https://${WIKISOURCE_HOSTNAME}/wiki/${encodeURIComponent(title)}`;
+}
+
+const CHINESE_DIGITS: Record<string, number> = {
+  '〇': 0,
+  '零': 0,
+  '一': 1,
+  '二': 2,
+  '两': 2,
+  '三': 3,
+  '四': 4,
+  '五': 5,
+  '六': 6,
+  '七': 7,
+  '八': 8,
+  '九': 9,
+};
+
+const CHINESE_UNITS: Record<string, number> = {
+  '十': 10,
+  '百': 100,
+  '千': 1_000,
+  '万': 10_000,
+};
+
+function parseChapterNumber(value: string) {
+  if (/^\d+$/u.test(value)) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+
+  if (![...value].some((character) => character in CHINESE_UNITS)) {
+    const digits = [...value].map((character) => CHINESE_DIGITS[character]);
+    if (digits.some((digit) => digit === undefined)) return null;
+    const parsed = Number(digits.join(''));
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+
+  let total = 0;
+  let section = 0;
+  let digit = 0;
+  for (const character of value) {
+    if (character in CHINESE_DIGITS) {
+      digit = CHINESE_DIGITS[character];
+      continue;
+    }
+    const unit = CHINESE_UNITS[character];
+    if (!unit) return null;
+    if (unit === 10_000) {
+      section += digit;
+      total += (section || 1) * unit;
+      section = 0;
+    } else {
+      section += (digit || 1) * unit;
+    }
+    digit = 0;
+  }
+  const parsed = total + section + digit;
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+const AUXILIARY_TITLE_PATTERN = /目录|索引|版本|说明|校勘|序|跋|附录|版权/u;
+const NUMBER_TOKEN = '[0-9〇零一二两三四五六七八九十百千万]+';
+const PREFIXED_CHAPTER_PATTERN = new RegExp(`^第(${NUMBER_TOKEN})[回章节卷](?:\\s|$)`, 'u');
+const NUMBERED_PART_PATTERN = new RegExp(`^[卷篇部](${NUMBER_TOKEN})(?:\\s|$)`, 'u');
+const DIRECTIONAL_PART_PATTERN = /^([上中下])[卷篇](?:\s|$)/u;
+
+function classifyChapter(page: MediaWikiPage, rootTitle: string): ClassifiedChapter | null {
+  if (page.ns !== 0 || !Number.isInteger(page.pageid) || !page.title) return null;
+  const prefix = `${rootTitle}/`;
+  if (!page.title.startsWith(prefix)) return null;
+  const displayTitle = page.title.slice(prefix.length).trim();
+  if (!displayTitle || displayTitle.includes('/') || AUXILIARY_TITLE_PATTERN.test(displayTitle)) return null;
+
+  let category: number;
+  let sequence: number | null;
+  const prefixedMatch = displayTitle.match(PREFIXED_CHAPTER_PATTERN);
+  const numberedPartMatch = displayTitle.match(NUMBERED_PART_PATTERN);
+  const directionalPartMatch = displayTitle.match(DIRECTIONAL_PART_PATTERN);
+  if (prefixedMatch) {
+    category = 0;
+    sequence = parseChapterNumber(prefixedMatch[1]);
+  } else if (numberedPartMatch) {
+    category = 1;
+    sequence = parseChapterNumber(numberedPartMatch[1]);
+  } else if (directionalPartMatch) {
+    category = 2;
+    sequence = { '上': 1, '中': 2, '下': 3 }[directionalPartMatch[1]] ?? null;
+  } else {
+    return null;
+  }
+  if (sequence === null) return null;
+
+  return {
+    pageId: page.pageid as number,
+    sourceTitle: page.title,
+    displayTitle,
+    category,
+    sequence,
+    normalizedTitle: displayTitle.normalize('NFKC'),
+  };
+}
+
+function compareClassifiedChapters(left: ClassifiedChapter, right: ClassifiedChapter) {
+  if (left.category !== right.category) return left.category - right.category;
+  if (left.sequence !== right.sequence) return left.sequence - right.sequence;
+  if (left.normalizedTitle !== right.normalizedTitle) {
+    return left.normalizedTitle < right.normalizedTitle ? -1 : 1;
+  }
+  return left.pageId - right.pageId;
+}
+
+export async function discoverWikisourceChapters(
+  rootTitle: string,
+  options: WikisourceClientOptions = {},
+): Promise<WikisourceChapterDescriptor[]> {
+  const normalizedRootTitle = rootTitle.trim();
+  const apiUrl = configuredApiUrl(options);
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const chapters: ClassifiedChapter[] = [];
+  let continuation: string | undefined;
+
+  do {
+    const response = await requestMediaWiki<MediaWikiAllPagesResponse>(apiUrl, {
+      list: 'allpages',
+      apprefix: `${normalizedRootTitle}/`,
+      apnamespace: '0',
+      aplimit: 'max',
+      ...(continuation ? { apcontinue: continuation } : {}),
+    }, fetchImpl);
+    for (const page of response.query?.allpages ?? []) {
+      const chapter = classifyChapter(page, normalizedRootTitle);
+      if (!chapter) continue;
+      chapters.push(chapter);
+      if (chapters.length > MAX_CHAPTERS) {
+        throw new OnlineBookError('ONLINE_BOOK_TOO_MANY_CHAPTERS', 413);
+      }
+    }
+    continuation = response.continue?.apcontinue;
+  } while (continuation);
+
+  return chapters
+    .sort(compareClassifiedChapters)
+    .map(({ category: _category, sequence: _sequence, normalizedTitle: _normalizedTitle, ...chapter }, index) => ({
+      ...chapter,
+      order: index + 1,
+    }));
 }
 
 export async function searchWikisource(
