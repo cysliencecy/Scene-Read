@@ -93,13 +93,19 @@ export const mergeOnlineBookSearchPages = (
   current: OnlineBookSearchPage,
   incoming: OnlineBookSearchPage,
 ): OnlineBookSearchPage => {
+  const items = [...current.items, ...incoming.items].filter(
+    (book, index, books) =>
+      books.findIndex(
+        (candidate) => candidate.source === book.source && candidate.sourceBookId === book.sourceBookId,
+      ) === index,
+  );
   const sourceErrors = [...current.sourceErrors, ...incoming.sourceErrors].filter(
     (error, index, errors) =>
       errors.findIndex((candidate) => candidate.source === error.source && candidate.code === error.code) === index,
   );
   return {
     ...incoming,
-    items: [...current.items, ...incoming.items],
+    items,
     sourceErrors,
   };
 };

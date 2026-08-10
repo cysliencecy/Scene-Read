@@ -7,21 +7,39 @@ import {
   onlineBookSourceLabel,
   onlineBookSourceWarning,
 } from '../src/api/client';
-import type { OnlineBookSearchPage } from '../src/types/app';
+import type { OnlineBook, OnlineBookSearchPage } from '../src/types/app';
 
 assert.equal(onlineBookSourceLabel('wikisource'), '中文维基文库');
 assert.equal(onlineBookSourceLabel('gutenberg'), 'Project Gutenberg');
 assert.equal(onlineBookSourceWarning({ source: 'wikisource', code: 'BOOK_SOURCE_UNAVAILABLE' }), '中文维基文库暂时不可用，已显示其它可用书源。');
 
+const onlineBook = (source: OnlineBook['source'], sourceBookId: string, title: string): OnlineBook => ({
+  source,
+  sourceBookId,
+  title,
+  authors: [],
+  languages: [],
+  sourceUrl: `https://example.com/${source}/${sourceBookId}`,
+  copyrightStatus: 'public_domain',
+  downloadCount: 0,
+  canImport: true,
+});
+
 const firstPage: OnlineBookSearchPage = {
-  items: [],
+  items: [
+    onlineBook('wikisource', '42', '先出现的维基文库作品'),
+    onlineBook('gutenberg', '42', '相同书号的 Gutenberg 作品'),
+  ],
   page: 1,
   total: 2,
   hasNextPage: true,
   sourceErrors: [{ source: 'wikisource', code: 'BOOK_SOURCE_UNAVAILABLE' }],
 };
 const secondPage: OnlineBookSearchPage = {
-  items: [],
+  items: [
+    onlineBook('wikisource', '42', '第二页重复作品'),
+    onlineBook('wikisource', '43', '第二页新增作品'),
+  ],
   page: 2,
   total: 2,
   hasNextPage: false,
@@ -31,7 +49,13 @@ const secondPage: OnlineBookSearchPage = {
   ],
 };
 
-assert.deepEqual(mergeOnlineBookSearchPages(firstPage, secondPage).sourceErrors, [
+const mergedPage = mergeOnlineBookSearchPages(firstPage, secondPage);
+assert.deepEqual(mergedPage.items.map(({ source, sourceBookId, title }) => ({ source, sourceBookId, title })), [
+  { source: 'wikisource', sourceBookId: '42', title: '先出现的维基文库作品' },
+  { source: 'gutenberg', sourceBookId: '42', title: '相同书号的 Gutenberg 作品' },
+  { source: 'wikisource', sourceBookId: '43', title: '第二页新增作品' },
+]);
+assert.deepEqual(mergedPage.sourceErrors, [
   { source: 'wikisource', code: 'BOOK_SOURCE_UNAVAILABLE' },
   { source: 'gutenberg', code: 'BOOK_SOURCE_UNAVAILABLE' },
 ]);
