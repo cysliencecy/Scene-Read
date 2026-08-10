@@ -6,7 +6,13 @@ import {
   sceneImages as mockSceneImages,
 } from './mockData.js';
 import { isSupabaseConfigured, supabase } from './supabaseClient.js';
-import { effectiveImageType, isPublishableAttempt, validateCanonicalImageTypeForWrite } from './imagePipeline.js';
+import {
+  API_ERROR_CODES,
+  ApiInputError,
+  effectiveImageType,
+  isPublishableAttempt,
+  validateCanonicalImageTypeForWrite,
+} from './imagePipeline.js';
 import type {
   Book,
   BookVisualProfile,
@@ -695,6 +701,94 @@ const toAttempt = (row: {
   createdAt: row.created_at,
 });
 
+type AttemptPersistenceRow = Parameters<typeof toAttempt>[0];
+
+export type ImageAttemptPersistence = {
+  findAttemptByKey(idempotencyKey: string): Promise<AttemptPersistenceRow | null>;
+  insertAttempt(payload: Record<string, unknown>): Promise<AttemptPersistenceRow>;
+  updateAttempt(id: string, payload: Record<string, unknown>): Promise<AttemptPersistenceRow>;
+  findCandidate(candidateId: string): Promise<{ chapter_id: string; source_block_id: string | null }>;
+  upsertProjection(payload: Record<string, unknown>): Promise<void>;
+};
+
+function createSupabaseAttemptPersistence(client: NonNullable<typeof supabase>): ImageAttemptPersistence {
+  return {
+    async findAttemptByKey(idempotencyKey) {
+      const { data, error } = await client
+        .from('image_generation_attempts')
+        .select('*')
+        .eq('idempotency_key', idempotencyKey)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+    async insertAttempt(payload) {
+      const { data, error } = await client.from('image_generation_attempts').insert(payload as never).select('*').single();
+      if (error) throw error;
+      if (!data) throw new Error('ATTEMPT_UPSERT_DID_NOT_RETURN_A_RECORD');
+      return data;
+    },
+    async updateAttempt(id, payload) {
+      const { data, error } = await client
+        .from('image_generation_attempts')
+        .update(payload as never)
+        .eq('id', id)
+        .select('*')
+        .single();
+      if (error) throw error;
+      if (!data) throw new Error('ATTEMPT_UPSERT_DID_NOT_RETURN_A_RECORD');
+      return data;
+    },
+    async findCandidate(candidateId) {
+      const { data, error } = await client
+        .from('scene_candidates')
+        .select('chapter_id, source_block_id')
+        .eq('id', candidateId)
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    async upsertProjection(payload) {
+      const { error } = await client.from('scene_images').upsert(payload as never, { onConflict: 'candidate_id' });
+      if (error) throw error;
+    },
+  };
+}
+
+function assertSameAttemptIdentity(existing: ImageGenerationAttempt, input: AttemptUpsertInput): void {
+  if (
+    existing.candidateId !== input.candidateId
+    || existing.taskId !== input.taskId
+    || existing.trigger !== input.trigger
+    || existing.requestedType !== input.requestedType
+  ) {
+    throw new ApiInputError(API_ERROR_CODES.idempotencyConflict, 409);
+  }
+}
+
+function isIdempotencyUniqueViolation(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === '23505');
+}
+
+async function ensurePublishableProjection(
+  persistence: ImageAttemptPersistence,
+  attempt: ImageGenerationAttempt,
+): Promise<void> {
+  if (!isPublishableAttempt(attempt)) return;
+  const candidate = await persistence.findCandidate(attempt.candidateId);
+  await persistence.upsertProjection({
+    id: `projection-${attempt.candidateId}`,
+    chapter_id: candidate.chapter_id,
+    source_block_id: candidate.source_block_id,
+    image_type: attempt.requestedType,
+    candidate_id: attempt.candidateId,
+    attempt_id: attempt.id,
+    variant: 'street',
+    prompt: attempt.prompt,
+    image_path: attempt.imageUrl ?? null,
+  });
+}
+
 export async function upsertSceneCandidate(input: PersistedCandidateInput): Promise<SceneCandidate> {
   if (!supabase) return apiMemoryRepository.upsertCandidate(input);
   const client = requireSupabase();
@@ -755,65 +849,70 @@ export async function upsertBookVisualProfile(input: ProfileUpsertInput): Promis
   return toProfile(data);
 }
 
+export async function upsertImageGenerationAttemptWithPersistence(
+  persistence: ImageAttemptPersistence,
+  input: AttemptUpsertInput,
+): Promise<ImageGenerationAttempt> {
+  const initialRow = await persistence.findAttemptByKey(input.idempotencyKey);
+  let existing = initialRow ? toAttempt(initialRow) : null;
+
+  while (true) {
+    if (existing) {
+      assertSameAttemptIdentity(existing, input);
+      if (existing.status !== 'queued' || input.status === 'queued') {
+        await ensurePublishableProjection(persistence, existing);
+        return existing;
+      }
+    }
+
+    const persistedInput = existing ? preserveQueuedAttemptFields(existing, input) : input;
+    const requestedType = validateCanonicalImageTypeForWrite(persistedInput.requestedType);
+    const payload = {
+      id: existing?.id ?? persistedInput.id ?? createId('attempt'),
+      idempotency_key: persistedInput.idempotencyKey,
+      candidate_id: persistedInput.candidateId,
+      task_id: persistedInput.taskId,
+      parent_attempt_id: persistedInput.parentAttemptId ?? null,
+      trigger: persistedInput.trigger,
+      requested_type: requestedType,
+      overridden_from: persistedInput.overriddenFrom ?? null,
+      status: persistedInput.status,
+      prompt: persistedInput.prompt,
+      provider: persistedInput.provider ?? null,
+      model: persistedInput.model ?? null,
+      width: persistedInput.width ?? null,
+      height: persistedInput.height ?? null,
+      image_url: persistedInput.imageUrl ?? null,
+      audit: persistedInput.audit ?? null,
+      classification_snapshot: persistedInput.classificationSnapshot ?? null,
+      contract_version: persistedInput.contractVersion ?? null,
+      profile_version: persistedInput.profileVersion ?? null,
+      artifact_metadata: persistedInput.artifactMetadata ?? null,
+    };
+
+    let row: AttemptPersistenceRow;
+    if (existing) {
+      row = await persistence.updateAttempt(existing.id, payload);
+    } else {
+      try {
+        row = await persistence.insertAttempt(payload);
+      } catch (error) {
+        if (!isIdempotencyUniqueViolation(error)) throw error;
+        const racedRow = await persistence.findAttemptByKey(input.idempotencyKey);
+        if (!racedRow) throw error;
+        existing = toAttempt(racedRow);
+        continue;
+      }
+    }
+    const attempt = toAttempt(row);
+    await ensurePublishableProjection(persistence, attempt);
+    return attempt;
+  }
+}
+
 export async function upsertImageGenerationAttempt(input: AttemptUpsertInput): Promise<ImageGenerationAttempt> {
   if (!supabase) return apiMemoryRepository.upsertAttempt(input);
-  const client = requireSupabase();
-  const existingResult = await client
-    .from('image_generation_attempts')
-    .select('*')
-    .eq('idempotency_key', input.idempotencyKey)
-    .maybeSingle();
-  if (existingResult.error) throw existingResult.error;
-  const existing = existingResult.data ? toAttempt(existingResult.data) : null;
-  if (existing && (existing.status !== 'queued' || input.status === 'queued')) return existing;
-  const persistedInput = existing ? preserveQueuedAttemptFields(existing, input) : input;
-  const requestedType = validateCanonicalImageTypeForWrite(persistedInput.requestedType);
-  const payload = {
-    id: existing?.id ?? persistedInput.id ?? createId('attempt'),
-    idempotency_key: persistedInput.idempotencyKey,
-    candidate_id: persistedInput.candidateId,
-    task_id: persistedInput.taskId,
-    parent_attempt_id: persistedInput.parentAttemptId ?? null,
-    trigger: persistedInput.trigger,
-    requested_type: requestedType,
-    overridden_from: persistedInput.overriddenFrom ?? null,
-    status: persistedInput.status,
-    prompt: persistedInput.prompt,
-    provider: persistedInput.provider ?? null,
-    model: persistedInput.model ?? null,
-    width: persistedInput.width ?? null,
-    height: persistedInput.height ?? null,
-    image_url: persistedInput.imageUrl ?? null,
-    audit: persistedInput.audit ?? null,
-    classification_snapshot: persistedInput.classificationSnapshot ?? null,
-    contract_version: persistedInput.contractVersion ?? null,
-    profile_version: persistedInput.profileVersion ?? null,
-    artifact_metadata: persistedInput.artifactMetadata ?? null,
-  };
-  const inserted = existing
-    ? await client.from('image_generation_attempts').update(payload as never).eq('id', existing.id).select('*').single()
-    : await client.from('image_generation_attempts').insert(payload).select('*').single();
-  if (inserted.error) throw inserted.error;
-  const row = inserted.data;
-  if (!row) throw new Error('ATTEMPT_UPSERT_DID_NOT_RETURN_A_RECORD');
-  const attempt = toAttempt(row);
-  if (!isPublishableAttempt(attempt)) return attempt;
-
-  const candidateResult = await client.from('scene_candidates').select('chapter_id, source_block_id').eq('id', attempt.candidateId).single();
-  if (candidateResult.error) throw candidateResult.error;
-  const projectionResult = await client.from('scene_images').upsert({
-    id: `projection-${attempt.candidateId}`,
-    chapter_id: candidateResult.data.chapter_id,
-    source_block_id: candidateResult.data.source_block_id,
-    image_type: attempt.requestedType,
-    candidate_id: attempt.candidateId,
-    attempt_id: attempt.id,
-    variant: 'street',
-    prompt: attempt.prompt,
-    image_path: attempt.imageUrl ?? null,
-  }, { onConflict: 'candidate_id' });
-  if (projectionResult.error) throw projectionResult.error;
-  return attempt;
+  return upsertImageGenerationAttemptWithPersistence(createSupabaseAttemptPersistence(requireSupabase()), input);
 }
 
 export async function listImageGenerationAttempts(candidateId: string): Promise<ImageGenerationAttempt[]> {
