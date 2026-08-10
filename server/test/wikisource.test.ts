@@ -42,6 +42,12 @@ test('merges root and chapter hits into unique canonical root works', async () =
             fullurl: 'https://zh.wikisource.org/wiki/%E7%BA%A2%E6%A5%BC%E6%A2%A6',
           },
           {
+            pageid: 200,
+            ns: 0,
+            title: '西游记',
+            fullurl: 'https://zh.wikisource.org/wiki/%E8%A5%BF%E6%B8%B8%E8%AE%B0',
+          },
+          {
             pageid: 300,
             ns: 0,
             title: '三国演义',
@@ -54,7 +60,7 @@ test('merges root and chapter hits into unique canonical root works', async () =
 
   const result = await searchWikisource('红楼梦', 1, { fetchImpl });
 
-  assert.deepEqual(requestedRootTitles, ['红楼梦', '三国演义']);
+  assert.deepEqual(requestedRootTitles, ['红楼梦', '西游记', '三国演义']);
   assert.deepEqual(result.items.map((item) => ({
     source: item.source,
     sourceBookId: item.sourceBookId,
@@ -69,6 +75,12 @@ test('merges root and chapter hits into unique canonical root works', async () =
     },
     {
       source: 'wikisource',
+      sourceBookId: '200',
+      title: '西游记',
+      sourceUrl: 'https://zh.wikisource.org/wiki/%E8%A5%BF%E6%B8%B8%E8%AE%B0',
+    },
+    {
+      source: 'wikisource',
       sourceBookId: '300',
       title: '三国演义',
       sourceUrl: 'https://zh.wikisource.org/wiki/%E4%B8%89%E5%9B%BD%E6%BC%94%E4%B9%89',
@@ -77,6 +89,45 @@ test('merges root and chapter hits into unique canonical root works', async () =
   assert.equal(result.items[0].copyrightStatus, 'authorized');
   assert.equal(result.items[0].canImport, true);
   assert.deepEqual(result.sourceErrors, []);
+});
+
+test('deduplicates distinct resolved roots that share a canonical page id', async () => {
+  const fetchImpl = fixtureFetch((url) => {
+    if (url.searchParams.get('list') === 'search') {
+      return {
+        query: {
+          searchinfo: { totalhits: 2 },
+          search: [
+            { ns: 0, pageid: 101, title: '红楼梦/第一回' },
+            { ns: 0, pageid: 102, title: '石头记/第一回' },
+          ],
+        },
+      };
+    }
+
+    return {
+      query: {
+        pages: [
+          {
+            pageid: 100,
+            ns: 0,
+            title: '红楼梦',
+            canonicalurl: 'https://zh.wikisource.org/wiki/%E7%BA%A2%E6%A5%BC%E6%A2%A6',
+          },
+          {
+            pageid: 100,
+            ns: 0,
+            title: '红楼梦',
+            canonicalurl: 'https://zh.wikisource.org/wiki/%E7%BA%A2%E6%A5%BC%E6%A2%A6',
+          },
+        ],
+      },
+    };
+  });
+
+  const result = await searchWikisource('石头记', 1, { fetchImpl });
+
+  assert.deepEqual(result.items.map((item) => item.sourceBookId), ['100']);
 });
 
 test('uses simplified search parameters and maps MediaWiki continuation to provider pagination', async () => {

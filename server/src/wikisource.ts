@@ -6,7 +6,6 @@ const DEFAULT_WIKISOURCE_API_URL = 'https://zh.wikisource.org/w/api.php';
 const WIKISOURCE_HOSTNAME = 'zh.wikisource.org';
 const SEARCH_PAGE_SIZE = 20;
 const REQUEST_TIMEOUT_MS = 15_000;
-const AUXILIARY_SUBPAGE_PATTERN = /(?:目录|版本|说明|校勘|序|跋|附录|版权)/u;
 const SOURCE_ATTRIBUTION = '来源：中文维基文库；作品版权与许可状态以来源页标注为准';
 
 export type WikisourceClientOptions = {
@@ -113,9 +112,8 @@ async function requestMediaWiki<T>(
 
 function rootTitleFromSearchHit(hit: MediaWikiSearchHit) {
   if (hit.ns !== 0 || !hit.title?.trim()) return null;
-  const [rootTitle, ...subpageParts] = hit.title.trim().split('/');
+  const [rootTitle] = hit.title.trim().split('/');
   if (!rootTitle?.trim()) return null;
-  if (subpageParts.length > 0 && AUXILIARY_SUBPAGE_PATTERN.test(subpageParts.join('/'))) return null;
   return rootTitle.trim();
 }
 
