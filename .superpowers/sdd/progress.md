@@ -14,4 +14,8 @@
 - W4: complete — commit 6e73c09; review pass in `.superpowers/sdd/reviews/w4-review.md`
 - W5: complete — commits 38965e8..78f9c3b; replacement review pass in `.superpowers/sdd/reviews/w5-rereview.md`
 - W6: complete — commits d9381a4..c10fab2; replacement review pass in `.superpowers/sdd/reviews/w6-rereview.md`
-- W7: eligible — Batch 7 documentation and live validation
+- W7: complete — commit 9306adc; review pass in `.superpowers/sdd/reviews/w7-review.md`
+
+## Final Review
+
+- Status: pending — all planned waves have pass receipts; broad spec/code review required before closure
