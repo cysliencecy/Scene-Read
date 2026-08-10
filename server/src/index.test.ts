@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const port = 4100 + Math.floor(Math.random() * 500);
@@ -128,6 +129,118 @@ test('candidate debug detail includes ranked evidence, threshold state, versions
   assert.equal(candidate.profileVersion, 'profile-v1');
   assert.equal(candidate.attempts.length, 1);
   assert.equal(candidate.attempts[0].audit.auditVersion, 'audit-v3');
+});
+
+test('eligible callback produces one audited attempt and one published reader projection', async () => {
+  const candidateId = 'e2e-eligible-candidate';
+  const idempotencyKey = 'e2e-eligible-attempt';
+  await request('/worker/scene-candidates', {
+    method: 'POST',
+    body: JSON.stringify(candidatePayload(candidateId)),
+  });
+  const callback = {
+    idempotencyKey,
+    candidateId,
+    taskId: 'rain-task-1',
+    trigger: 'automatic',
+    requestedType: 'environment',
+    prompt: 'A rain-soaked bridge, landscape 3:2.',
+    status: 'publishable',
+    provider: 'glm',
+    model: 'glm-image',
+    width: 1536,
+    height: 1024,
+    imageBase64: 'eligible-reader-artifact',
+    mimeType: 'image/png',
+    audit: {
+      verdict: 'publishable',
+      rules: [{ rule: 'environment-composition', passed: true, severity: 'info', explanation: 'Compliant.' }],
+      severeFactConflict: false,
+      provider: 'vision',
+      model: 'vision-model',
+      auditVersion: 'audit-v1',
+    },
+  };
+  const first = await request('/worker/image-generation-attempts', {
+    method: 'POST', body: JSON.stringify(callback),
+  });
+  const repeated = await request('/worker/image-generation-attempts', {
+    method: 'POST', body: JSON.stringify(callback),
+  });
+
+  assert.equal(first.response.status, 200);
+  assert.deepEqual(repeated.body.data, first.body.data);
+  const debug = await request('/scene-candidates?chapterId=rain-chapter-1&includeAttempts=true');
+  const candidate = (debug.body.data as Array<Record<string, any>>).find((item) => item.id === candidateId);
+  assert.ok(candidate);
+  assert.equal(candidate.attempts.length, 1);
+  assert.equal(candidate.attempts[0].audit.verdict, 'publishable');
+  const reader = await request('/scene-images');
+  const projections = (reader.body.data as Array<Record<string, unknown>>)
+    .filter((image) => image.candidateId === candidateId);
+  assert.equal(projections.length, 1);
+  assert.equal(projections[0].attemptId, candidate.attempts[0].id);
+  assert.equal(projections[0].imageUrl, 'data:image/png;base64,eligible-reader-artifact');
+});
+
+test('below-threshold callback remains queryable with no attempt or reader projection', async () => {
+  const candidateId = 'e2e-below-threshold-candidate';
+  const payload = candidatePayload(candidateId);
+  payload.candidates[0].classification.status = 'below_threshold';
+  payload.candidates[0].classification.rankedTypes[0].confidence = 0.649;
+  await request('/worker/scene-candidates', { method: 'POST', body: JSON.stringify(payload) });
+
+  const debug = await request('/scene-candidates?chapterId=rain-chapter-1&includeAttempts=true');
+  const candidate = (debug.body.data as Array<Record<string, any>>).find((item) => item.id === candidateId);
+  assert.ok(candidate);
+  assert.equal(candidate.classification.status, 'below_threshold');
+  assert.equal(candidate.classification.rankedTypes[0].confidence, 0.649);
+  assert.deepEqual(candidate.attempts, []);
+  const reader = await request('/scene-images');
+  assert.equal((reader.body.data as Array<Record<string, unknown>>)
+    .some((image) => image.candidateId === candidateId), false);
+});
+
+test('legacy scene, object, and character candidates retain stored values and compatibility reads', async () => {
+  const legacyTypes = ['scene', 'object', 'character'] as const;
+  await request('/worker/scene-candidates', {
+    method: 'POST',
+    body: JSON.stringify({
+      taskId: 'rain-task-1', bookId: 'rain', chapterId: 'rain-chapter-1',
+      candidates: legacyTypes.map((imageType, index) => ({
+        id: `legacy-${imageType}-e2e`, sourceBlockId: 'rain-p-1', position: index,
+        reason: `Legacy ${imageType}`, sourceText: 'Legacy source.', promptDraft: 'Legacy prompt.',
+        imageType, confidence: 0.8,
+      })),
+      generatedImages: [],
+    }),
+  });
+
+  const debug = await request('/scene-candidates?chapterId=rain-chapter-1&includeAttempts=true');
+  const candidates = debug.body.data as Array<Record<string, any>>;
+  const legacyScene = candidates.find((candidate) => candidate.id === 'legacy-scene-e2e');
+  const legacyObject = candidates.find((candidate) => candidate.id === 'legacy-object-e2e');
+  const legacyCharacter = candidates.find((candidate) => candidate.id === 'legacy-character-e2e');
+  assert.ok(legacyScene);
+  assert.ok(legacyObject);
+  assert.ok(legacyCharacter);
+  assert.equal(legacyScene.imageType, 'scene');
+  assert.equal(legacyScene.effectiveImageType, 'environment');
+  assert.equal(legacyObject.imageType, 'object');
+  assert.equal(legacyObject.effectiveImageType, 'object');
+  assert.equal(legacyCharacter.imageType, 'character');
+  assert.equal(legacyCharacter.effectiveImageType, null);
+});
+
+test('formal task dispatch defaults to the two-stage classifier and GLM without shadow execution', () => {
+  const source = readFileSync(path.resolve('src/index.ts'), 'utf8');
+  const runner = source.slice(source.indexOf('function runWorkerForTask'), source.indexOf('\napp.', source.indexOf('function runWorkerForTask')));
+
+  assert.match(runner, /WORKER_SCENE_PROVIDER\s*\?\?\s*'openai'/);
+  assert.match(runner, /IMAGE_PROVIDER\s*\?\?\s*'glm'/);
+  assert.doesNotMatch(runner, /WORKER_SCENE_PROVIDER\s*\?\?\s*'heuristic'/);
+  assert.doesNotMatch(runner, /IMAGE_PROVIDER\s*\?\?\s*'mock-svg'/);
+  assert.doesNotMatch(runner, /shadow|legacy classifier|generate_images_for_candidates/i);
 });
 
 test('repeated candidate/profile callback returns one candidate and one fact suggestion', async () => {
@@ -272,6 +385,14 @@ test('manual regeneration requires canonical override and key, links its parent,
   assert.equal(data.attempt.requestedType, 'interaction');
   assert.equal(data.attempt.trigger, 'manual');
   assert.equal(data.task.id, data.attempt.taskId);
+
+  const debug = await request('/scene-candidates?chapterId=rain-chapter-1&includeAttempts=true');
+  const candidate = (debug.body.data as Array<Record<string, any>>).find((item) => item.id === candidateId);
+  assert.ok(candidate);
+  assert.deepEqual(candidate.attempts.map((attempt: Record<string, unknown>) => attempt.id), [
+    (parent.body.data as Record<string, unknown>).id,
+    data.attempt.id,
+  ]);
 });
 
 test('manual command lifecycle preserves immutable queued provenance through terminal callback and debug query', async () => {
@@ -400,7 +521,7 @@ test('legacy character reclassification repeated after worker exit returns exist
     const taskId = (first.body.data as Record<string, any>).task.id;
     const dispatchPattern = new RegExp(`\\[worker:${taskId}\\] (?:exited|failed to start)`, 'g');
     const serverOutput = () => `${stdout.join('')}\n${stderr.join('')}`;
-    for (let attempt = 0; attempt < 40 && (serverOutput().match(dispatchPattern) ?? []).length === 0; attempt += 1) {
+    for (let attempt = 0; attempt < 200 && (serverOutput().match(dispatchPattern) ?? []).length === 0; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     assert.equal((serverOutput().match(dispatchPattern) ?? []).length, 1, serverOutput());

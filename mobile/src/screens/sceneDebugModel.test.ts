@@ -131,6 +131,21 @@ test('maps exactly three ranked types, primary confidence, and the 0.65 threshol
   assert.equal(model.thresholdMessage, 'Below automatic generation threshold (0.65).');
 });
 
+test('preserves the Worker and Server serialized version, evidence, and tag field names', async () => {
+  const { buildSceneDebugModel } = await import('./sceneDebugModel');
+  const model = buildSceneDebugModel(candidateDetail());
+
+  assert.equal(model.classificationModel, 'kimi-k3');
+  assert.equal(model.promptVersion, 'classification-v2');
+  assert.equal(model.contractVersion, 'composition-v1');
+  assert.equal(model.profileVersion, 'profile-v3');
+  assert.deepEqual(model.evidence, [{
+    sourceBlockId: 'paragraph-2',
+    sourceText: 'Lin handed Mo the sealed letter.',
+  }]);
+  assert.deepEqual(model.auxiliaryTags, ['letter', 'suspense']);
+});
+
 test('maps audit severity and blocked status while ordering generation history newest first', async () => {
   const { buildSceneDebugModel } = await import('./sceneDebugModel');
   const model = buildSceneDebugModel(candidateDetail());

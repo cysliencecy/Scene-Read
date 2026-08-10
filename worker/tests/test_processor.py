@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scene_reader_worker.image_generator import (
     generate_images_for_candidates,
@@ -10,8 +10,24 @@ from scene_reader_worker.ai_client import (
     DEFAULT_AI_MODEL,
     _get_api_key,
 )
-from scene_reader_worker.processor import process_chapter
+from scene_reader_worker.pipeline import generation_attempt_callback_payload, run_generation_attempt
+from scene_reader_worker.processor import (
+    candidate_callback_payload,
+    formal_generation_eligible,
+    process_chapter,
+)
 from scene_reader_worker.prompt import build_scene_recognition_user_prompt
+from scene_reader_worker.types import (
+    CandidateClassification,
+    CandidateSeed,
+    ClassifiedCandidate,
+    GeneratedImageArtifact,
+    ImageAuditResult,
+    ImageAuditRuleResult,
+    ImageGenerationRequest,
+    RankedImageType,
+    VisualEvidence,
+)
 from scene_reader_worker.validator import validate_ai_candidates
 
 
@@ -43,7 +59,128 @@ def result_candidate(source_id: str, image_type: str, confidence: float, positio
     )
 
 
+def classified_fixture(*, status: str = "eligible", confidence: float = 0.91) -> ClassifiedCandidate:
+    evidence = (VisualEvidence(sourceBlockId="p1", sourceText="Rain crossed the old bridge."),)
+    return ClassifiedCandidate(
+        seed=CandidateSeed(
+            id="chapter-1-p1",
+            chapterId="chapter-1",
+            sourceBlockId="p1",
+            position=0,
+            readingValue=0.93,
+            reason="The bridge establishes the setting.",
+            evidence=evidence,
+        ),
+        classification=CandidateClassification(
+            primaryType="environment",
+            rankedTypes=(
+                RankedImageType("environment", confidence),
+                RankedImageType("atmosphere", 0.74),
+                RankedImageType("object", 0.31),
+            ),
+            evidence=evidence,
+            reason="The bridge establishes the setting.",
+            auxiliaryTags=("rain",),
+            profileFactSuggestions=(),
+            status=status,
+            model="kimi-k3",
+            promptVersion="kimi-classification-v1",
+        ),
+        provider="kimi",
+    )
+
+
 class ProcessorTest(unittest.TestCase):
+    def test_eligible_formal_fixture_generates_once_audits_once_and_serializes_server_fields(self) -> None:
+        classified = classified_fixture()
+        with patch("scene_reader_worker.processor.classify_chapter", return_value=([classified], [])):
+            processed = process_chapter(SAMPLE_PAYLOAD, provider="openai")
+
+        request = ImageGenerationRequest(
+            idempotencyKey="task-1:chapter-1-p1",
+            candidateId=classified.seed.id,
+            taskId="task-1",
+            trigger="automatic",
+            requestedType="environment",
+            prompt="A rain-soaked bridge, landscape 3:2.",
+            style="鍐欏疄",
+            aspectRatio="3:2",
+            contractVersion=classified.contractVersion,
+        )
+        generate = Mock(return_value=GeneratedImageArtifact(
+            imageBase64="reader-artifact",
+            mimeType="image/png",
+            provider="glm",
+            model="glm-image",
+            width=1536,
+            height=1024,
+        ))
+        audit = Mock(return_value=ImageAuditResult(
+            verdict="publishable",
+            rules=(ImageAuditRuleResult("environment-composition", True, "info", "Compliant."),),
+            severeFactConflict=False,
+            provider="vision",
+            model="vision-model",
+            auditVersion="audit-v1",
+        ))
+
+        attempt = run_generation_attempt(request, provider="glm", generate=generate, audit=audit)
+        candidate_payload = candidate_callback_payload(processed)
+        attempt_payload = generation_attempt_callback_payload(request, attempt)
+
+        generate.assert_called_once_with(request)
+        audit.assert_called_once()
+        self.assertEqual(candidate_payload["candidates"][0]["classification"]["primaryType"], "environment")
+        self.assertEqual(candidate_payload["candidates"][0]["classification"]["status"], "eligible")
+        self.assertEqual(attempt_payload["idempotencyKey"], "task-1:chapter-1-p1")
+        self.assertEqual(attempt_payload["requestedType"], "environment")
+        self.assertEqual(attempt_payload["status"], "publishable")
+        self.assertEqual(attempt_payload["audit"]["auditVersion"], "audit-v1")
+
+    def test_below_threshold_formal_fixture_is_saved_for_debug_without_generation_attempt(self) -> None:
+        classified = classified_fixture(status="below_threshold", confidence=0.649)
+        with patch("scene_reader_worker.processor.classify_chapter", return_value=([classified], [])):
+            processed = process_chapter(SAMPLE_PAYLOAD, provider="openai")
+
+        callback = candidate_callback_payload(processed)
+
+        self.assertEqual(processed.candidates, [])
+        self.assertFalse(formal_generation_eligible(classified.classification, classified.provider))
+        self.assertEqual(callback["candidates"][0]["classification"]["status"], "below_threshold")
+        self.assertEqual(callback["candidates"][0]["classification"]["rankedTypes"][0]["confidence"], 0.649)
+
+    def test_severe_audit_fixture_retains_artifact_but_serializes_blocked_status(self) -> None:
+        request = ImageGenerationRequest(
+            idempotencyKey="task-1:blocked",
+            candidateId="chapter-1-p1",
+            taskId="task-1",
+            trigger="automatic",
+            requestedType="environment",
+            prompt="A rain-soaked bridge, landscape 3:2.",
+            style="鍐欏疄",
+            aspectRatio="3:2",
+            contractVersion="composition-v1",
+        )
+        generate = Mock(return_value=GeneratedImageArtifact(
+            imageBase64="blocked-artifact", mimeType="image/png", provider="glm",
+            model="glm-image", width=1536, height=1024,
+        ))
+        audit = Mock(return_value=ImageAuditResult(
+            verdict="blocked",
+            rules=(ImageAuditRuleResult("fact", False, "severe", "Wrong landmark."),),
+            severeFactConflict=True,
+            provider="vision", model="vision-model", auditVersion="audit-v1",
+        ))
+
+        attempt = run_generation_attempt(request, provider="glm", generate=generate, audit=audit)
+        callback = generation_attempt_callback_payload(request, attempt)
+
+        generate.assert_called_once()
+        audit.assert_called_once()
+        self.assertEqual(callback["status"], "blocked")
+        self.assertEqual(callback["imageBase64"], "blocked-artifact")
+        self.assertTrue(callback["audit"]["severeFactConflict"])
+
     def test_scene_recognition_defaults_to_kimi_k3(self) -> None:
         self.assertEqual(DEFAULT_AI_BASE_URL, "https://api.kimi.com/coding")
         self.assertEqual(DEFAULT_AI_MODEL, "kimi-k3")

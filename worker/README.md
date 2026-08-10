@@ -2,14 +2,15 @@
 
 Python Worker for chapter text processing and scene recognition.
 
-Current T12 scope:
+The formal expanded-image flow:
 
-- Read one chapter payload.
-- Use Kimi K3 through its Anthropic-compatible API when configured.
-- Output location/environment changes, source snippets, insertion positions, prompt drafts, validation logs.
-- Fall back to local heuristic recognition when no AI key is configured.
-- Generate at least one scene image from the selected prompt.
-- Post generated image data back to the API so the server can upload to Supabase Storage and write `scene_images`.
+- Uses Kimi K3 for whole-chapter discovery and local-context six-type classification.
+- Saves below-threshold candidates for debug without generating an image.
+- Builds a deterministic `3:2` composition prompt, generates once with GLM, and audits once.
+- Posts candidates to `/worker/scene-candidates` and attempts to `/worker/image-generation-attempts`.
+- Publishes only attempts accepted by the audit; blocked artifacts remain debug-only.
+
+The local `heuristic` and `mock-svg` modes remain development aids. They are not formal generation fallbacks and cannot publish a new formal reader image.
 
 ## Requirements
 
@@ -63,10 +64,13 @@ For App import flow triggered by the server, also put the image provider in `ser
 
 ```text
 IMAGE_PROVIDER=glm
-WORKER_SCENE_PROVIDER=auto
+WORKER_SCENE_PROVIDER=openai
 WORKER_MAX_IMAGES=1
 GLM_API_KEY=your-glm-or-bigmodel-key
 GLM_IMAGE_MODEL=glm-image
+VISION_AUDIT_ENDPOINT=https://your-vision-endpoint.example/v1/audit
+VISION_AUDIT_MODEL=vision-model
+VISION_AUDIT_VERSION=audit-v1
 ```
 
 Formal GLM requests always use the code-owned supported landscape size `1536x1024`;
@@ -117,10 +121,10 @@ Write output to a file:
 python -m scene_reader_worker --input samples/chapter-input.json --output .tmp/scene-candidates.json
 ```
 
-Post output to the local API:
+Run the formal two-stage pipeline against a local API task. This posts canonical candidates and attempt callbacks to their dedicated endpoints:
 
 ```powershell
-python -m scene_reader_worker --input samples/chapter-input.json --api-url http://localhost:4000
+python -m scene_reader_worker --task-id task-1 --api-url http://localhost:4001 --provider openai --generate-images --image-provider glm --max-images 1
 ```
 
 Generate one image and include it in the output:
@@ -141,11 +145,13 @@ Use the default external image provider:
 python -m scene_reader_worker --input samples/chapter-input.json --provider openai --generate-images --max-images 1
 ```
 
-Generate and post the image to the local API:
+Local debug-only heuristic output can still be inspected, but it does not create a formal attempt or reader projection:
 
 ```powershell
-python -m scene_reader_worker --input samples/chapter-input.json --provider heuristic --generate-images --image-provider mock-svg --api-url http://localhost:4000
+python -m scene_reader_worker --input samples/chapter-input.json --provider heuristic --output .tmp/heuristic-debug.json
 ```
+
+The full migration, activation, callback, and rollback procedure is in [`docs/expanded-image-pipeline.md`](../docs/expanded-image-pipeline.md).
 
 ## Offline expanded-image quality gate
 

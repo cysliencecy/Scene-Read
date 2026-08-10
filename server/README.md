@@ -26,10 +26,15 @@ When the App submits `POST /chapters/:chapterId/generation-task`, the local API 
 Worker defaults:
 
 ```powershell
-$env:WORKER_SCENE_PROVIDER="heuristic"
-$env:IMAGE_PROVIDER="mock-svg"
+$env:WORKER_SCENE_PROVIDER="openai"
+$env:IMAGE_PROVIDER="glm"
 $env:WORKER_MAX_IMAGES="1"
+$env:VISION_AUDIT_ENDPOINT="https://your-vision-endpoint.example/v1/audit"
+$env:VISION_AUDIT_MODEL="vision-model"
+$env:VISION_AUDIT_VERSION="audit-v1"
 ```
+
+Formal tasks fail closed when Kimi, GLM, or vision-audit configuration is unavailable. `heuristic` and `mock-svg` are explicit local-debug modes, not formal fallbacks. See [`docs/expanded-image-pipeline.md`](../docs/expanded-image-pipeline.md) before migration or activation.
 
 On Windows, the server tries `py -3` by default. If your machine does not have the Python launcher configured, set the Python 3 executable explicitly before running the server:
 
@@ -161,6 +166,31 @@ Content-Type: application/json
 ```
 
 The response contains the queued task and append-only attempt, linked to the previous attempt through `parentAttemptId`. Repeating the request returns the same pair. A legacy `character` candidate submitted without a confirmed override receives a `reclassify` instruction; the server never assumes `portrait`.
+
+Worker attempt callbacks use the dedicated append-only endpoint; only `publishable` creates or replaces a reader projection:
+
+```powershell
+$attempt = @{
+  idempotencyKey = 'task-1:candidate-1'
+  candidateId = 'candidate-1'
+  taskId = 'task-1'
+  trigger = 'automatic'
+  requestedType = 'environment'
+  prompt = 'deterministic 3:2 prompt'
+  status = 'publishable'
+  provider = 'glm'
+  model = 'glm-image'
+  width = 1536
+  height = 1024
+  imageBase64 = '<base64>'
+  mimeType = 'image/png'
+  audit = @{
+    verdict = 'publishable'; rules = @(); severeFactConflict = $false
+    provider = 'vision'; model = 'vision-model'; auditVersion = 'audit-v1'
+  }
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Method Post -Uri 'http://localhost:4001/worker/image-generation-attempts' -ContentType 'application/json' -Body $attempt
+```
 
 ## Scope
 
