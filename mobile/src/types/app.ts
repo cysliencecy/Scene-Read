@@ -169,8 +169,8 @@ export type SceneCandidate = {
 export type SceneCandidateDebugDetail = SceneCandidate & {
   storedImageType?: StoredImageType;
   effectiveImageType?: CanonicalImageType | null;
-  classification: CandidateClassification;
-  contractVersion: string;
+  classification?: CandidateClassification;
+  contractVersion?: string;
   profileVersion?: string;
   attempts: ImageGenerationAttempt[];
 };

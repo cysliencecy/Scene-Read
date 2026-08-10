@@ -87,7 +87,7 @@ export function SceneDebugScreen({
         </View>
       ) : chapterCandidates.map((candidate, index) => {
         const model = buildSceneDebugModel(candidate);
-        const selectedType = selectedOverrides[candidate.id] ?? candidate.classification.primaryType;
+        const selectedType = selectedOverrides[candidate.id] ?? model.initialOverrideType;
         const commandState = commandStates[candidate.id] ?? { status: 'idle' as const };
         const publishedImage = sceneImages.find((image) => image.candidateId === candidate.id)
           ?? sceneImages.find((image) => image.chapterId === candidate.chapterId && image.sourceBlockId === candidate.sourceBlockId);
@@ -96,27 +96,33 @@ export function SceneDebugScreen({
           <View key={candidate.id} style={styles.card}>
             <View style={styles.cardHeader}>
               <Text style={styles.order}>Candidate #{candidate.order + 1 || index + 1}</Text>
-              <Text style={styles.confidence}>Primary {model.primaryConfidencePercent}%</Text>
+              <Text style={styles.confidence}>
+                {model.primaryConfidencePercent === null ? 'Legacy / unclassified' : `Primary ${model.primaryConfidencePercent}%`}
+              </Text>
             </View>
 
-            <Text style={[styles.statusBanner, candidate.classification.status !== 'eligible' && styles.warningBanner]}>
-              {model.thresholdMessage}
+            <Text style={[styles.statusBanner, model.classificationStatus !== 'eligible' && styles.warningBanner]}>
+              {model.classificationMessage}
             </Text>
             <Text style={styles.meta}>sourceBlockId: {model.sourceBlockId}</Text>
-            <Text style={styles.meta}>classification: {model.classificationModel} / {model.promptVersion}</Text>
-            <Text style={styles.meta}>composition contract: {model.contractVersion}</Text>
+            <Text style={styles.meta}>classification: {model.classificationModel ?? 'not classified'} / {model.promptVersion ?? 'unavailable'}</Text>
+            <Text style={styles.meta}>composition contract: {model.contractVersion ?? 'unavailable'}</Text>
             <Text style={styles.meta}>profile: {model.profileVersion ?? 'none'}</Text>
             <Text style={styles.meta}>stored/effective type: {candidate.storedImageType ?? candidate.imageType ?? '-'} / {candidate.effectiveImageType ?? '-'}</Text>
 
             <Text style={styles.sectionLabel}>Ranked image types</Text>
-            <View style={styles.rankList}>
-              {model.rankedTypes.map((ranked, rankIndex) => (
+            {model.rankedTypes.length === 0 ? (
+              <Text style={styles.bodyText}>No canonical ranking is stored for this legacy candidate.</Text>
+            ) : (
+              <View style={styles.rankList}>
+                {model.rankedTypes.map((ranked, rankIndex) => (
                 <View key={ranked.imageType} style={styles.rankRow}>
                   <Text style={styles.rankName}>{rankIndex + 1}. {ranked.imageType}{ranked.isPrimary ? ' (primary)' : ''}</Text>
                   <Text style={styles.rankConfidence}>{ranked.confidencePercent}%</Text>
                 </View>
-              ))}
-            </View>
+                ))}
+              </View>
+            )}
 
             <Text style={styles.sectionLabel}>Evidence</Text>
             {model.evidence.map((evidence) => (
@@ -175,36 +181,42 @@ export function SceneDebugScreen({
             ) : null}
 
             <Text style={styles.sectionLabel}>Manual canonical override</Text>
-            <View style={styles.typeGrid}>
-              {CANONICAL_IMAGE_TYPES.map((imageType) => {
-                const selected = selectedType === imageType;
-                return (
-                  <Pressable
-                    accessibilityLabel={`Select ${imageType} override for candidate ${candidate.id}`}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected }}
-                    key={imageType}
-                    onPress={() => selectOverride(candidate.id, imageType)}
-                    style={[styles.typeButton, selected && styles.typeButtonSelected]}
-                  >
-                    <Text style={[styles.typeButtonText, selected && styles.typeButtonTextSelected]}>{imageType}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            <Text style={styles.bodyText}>Selection is local only. Confirm separately to create a request.</Text>
-            <Pressable
-              accessibilityLabel={`Confirm regeneration for candidate ${candidate.id} as ${selectedType}`}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: commandState.status === 'pending' }}
-              disabled={commandState.status === 'pending'}
-              onPress={() => confirmRegeneration(candidate.id, selectedType)}
-              style={[styles.confirmButton, commandState.status === 'pending' && styles.confirmButtonDisabled]}
-            >
-              <Text style={styles.confirmButtonText}>
-                {commandState.status === 'pending' ? 'Submitting…' : `Confirm regeneration as ${selectedType}`}
-              </Text>
-            </Pressable>
+            {model.canConfirmOverride && selectedType ? (
+              <>
+                <View style={styles.typeGrid}>
+                  {CANONICAL_IMAGE_TYPES.map((imageType) => {
+                    const selected = selectedType === imageType;
+                    return (
+                      <Pressable
+                        accessibilityLabel={`Select ${imageType} override for candidate ${candidate.id}`}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        key={imageType}
+                        onPress={() => selectOverride(candidate.id, imageType)}
+                        style={[styles.typeButton, selected && styles.typeButtonSelected]}
+                      >
+                        <Text style={[styles.typeButtonText, selected && styles.typeButtonTextSelected]}>{imageType}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.bodyText}>Selection is local only. Confirm separately to create a request.</Text>
+                <Pressable
+                  accessibilityLabel={`Confirm regeneration for candidate ${candidate.id} as ${selectedType}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: commandState.status === 'pending' }}
+                  disabled={commandState.status === 'pending'}
+                  onPress={() => confirmRegeneration(candidate.id, selectedType)}
+                  style={[styles.confirmButton, commandState.status === 'pending' && styles.confirmButtonDisabled]}
+                >
+                  <Text style={styles.confirmButtonText}>
+                    {commandState.status === 'pending' ? 'Submitting…' : `Confirm regeneration as ${selectedType}`}
+                  </Text>
+                </Pressable>
+              </>
+            ) : (
+              <Text style={styles.bodyText}>Override confirmation is unavailable until reclassification provides a canonical type.</Text>
+            )}
             {commandState.message ? (
               <Text style={commandState.status === 'error' ? styles.errorText : styles.successText}>{commandState.message}</Text>
             ) : null}

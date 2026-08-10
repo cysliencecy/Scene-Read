@@ -43,12 +43,18 @@ export function auditSeverityLabel(severity: ImageAuditResult['rules'][number]['
 }
 
 export function buildSceneDebugModel(detail: SceneCandidateDebugDetail) {
-  const primaryConfidence = detail.classification.rankedTypes[0]?.confidence ?? detail.confidence;
-  const thresholdMessage = detail.classification.status === 'below_threshold'
-    ? `Below automatic generation threshold (${CLASSIFICATION_CONFIDENCE_THRESHOLD.toFixed(2)}).`
-    : detail.classification.status === 'invalid'
-      ? 'Classification is invalid and cannot generate automatically.'
-      : `Eligible for automatic generation at or above ${CLASSIFICATION_CONFIDENCE_THRESHOLD.toFixed(2)}.`;
+  const classification = detail.classification;
+  const legacyClassificationMessage = 'Legacy candidate has no canonical classification. Reclassification is required before a canonical override can be confirmed.';
+  const primaryConfidence = classification
+    ? classification.rankedTypes[0]?.confidence ?? detail.confidence
+    : null;
+  const thresholdMessage = !classification
+    ? legacyClassificationMessage
+    : classification.status === 'below_threshold'
+      ? `Below automatic generation threshold (${CLASSIFICATION_CONFIDENCE_THRESHOLD.toFixed(2)}).`
+      : classification.status === 'invalid'
+        ? 'Classification is invalid and cannot generate automatically.'
+        : `Eligible for automatic generation at or above ${CLASSIFICATION_CONFIDENCE_THRESHOLD.toFixed(2)}.`;
 
   const history = [...detail.attempts]
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
@@ -65,21 +71,25 @@ export function buildSceneDebugModel(detail: SceneCandidateDebugDetail) {
     id: detail.id,
     sourceBlockId: detail.sourceBlockId,
     sourceText: detail.sourceText,
-    reason: detail.classification.reason,
-    rankedTypes: detail.classification.rankedTypes.map((ranked, index) => ({
+    reason: classification?.reason ?? detail.reason,
+    rankedTypes: (classification?.rankedTypes ?? []).map((ranked, index) => ({
       imageType: ranked.imageType,
       confidencePercent: confidencePercent(ranked.confidence),
       isPrimary: index === 0,
     })),
-    primaryConfidencePercent: confidencePercent(primaryConfidence),
+    primaryConfidencePercent: primaryConfidence === null ? null : confidencePercent(primaryConfidence),
     thresholdMessage,
-    classificationStatus: detail.classification.status,
-    evidence: detail.classification.evidence,
-    auxiliaryTags: detail.classification.auxiliaryTags,
-    classificationModel: detail.classification.model,
-    promptVersion: detail.classification.promptVersion,
-    contractVersion: detail.contractVersion,
+    classificationState: classification ? 'classified' as const : 'legacy_unclassified' as const,
+    classificationMessage: classification ? thresholdMessage : legacyClassificationMessage,
+    classificationStatus: classification?.status,
+    evidence: classification?.evidence ?? [],
+    auxiliaryTags: classification?.auxiliaryTags ?? [],
+    classificationModel: classification?.model ?? null,
+    promptVersion: classification?.promptVersion ?? null,
+    contractVersion: detail.contractVersion ?? null,
     profileVersion: detail.profileVersion,
+    canConfirmOverride: Boolean(classification),
+    initialOverrideType: classification?.primaryType ?? null,
     history,
   };
 }

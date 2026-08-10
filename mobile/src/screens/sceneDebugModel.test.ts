@@ -85,6 +85,36 @@ const candidateDetail = (): SceneCandidateDebugDetail => ({
   ],
 });
 
+const legacyCandidateDetail = () => ({
+  id: 'legacy-character-candidate',
+  taskId: 'rain-task-1',
+  bookId: 'rain',
+  chapterId: 'rain-chapter-1',
+  order: 0,
+  sourceBlockId: 'rain-p-1',
+  position: 1,
+  reason: 'Legacy person image',
+  sourceText: 'A figure waits in the rain.',
+  promptDraft: 'Legacy prompt',
+  imageType: 'character' as const,
+  effectiveImageType: null,
+  confidence: 0.8,
+  attempts: [],
+} satisfies SceneCandidateDebugDetail);
+
+test('maps a Server-shaped legacy candidate to an explicit unclassified state with no override confirmation', async () => {
+  const { buildSceneDebugModel } = await import('./sceneDebugModel');
+
+  const model = buildSceneDebugModel(legacyCandidateDetail());
+
+  assert.equal(model.classificationState, 'legacy_unclassified');
+  assert.equal(model.classificationMessage, 'Legacy candidate has no canonical classification. Reclassification is required before a canonical override can be confirmed.');
+  assert.deepEqual(model.rankedTypes, []);
+  assert.equal(model.primaryConfidencePercent, null);
+  assert.equal(model.canConfirmOverride, false);
+  assert.equal(model.initialOverrideType, null);
+});
+
 test('maps exactly three ranked types, primary confidence, and the 0.65 threshold message', async () => {
   const { buildSceneDebugModel } = await import('./sceneDebugModel');
   const model = buildSceneDebugModel(candidateDetail());
