@@ -1,5 +1,6 @@
 import { OnlineBookError } from './onlineBookProvider.js';
 import type { OnlineBookProvider } from './onlineBookProvider.js';
+import { externalFetch } from './httpClient.js';
 import type {
   BookCopyrightStatus,
   OnlineBook,
@@ -34,10 +35,18 @@ type GutendexPage = {
   results?: GutendexBook[];
 };
 
+export type GutendexClientOptions = {
+  fetchImpl?: typeof fetch;
+};
+
 const baseUrl = () => (process.env.GUTENDEX_BASE_URL ?? DEFAULT_GUTENDEX_BASE_URL).replace(/\/+$/, '');
 
-const fetchWithTimeout = (url: string, timeoutMs: number, init?: RequestInit) =>
-  fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+const fetchWithTimeout = (
+  url: string,
+  timeoutMs: number,
+  init?: RequestInit,
+  fetchImpl: typeof fetch = externalFetch,
+) => fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
 
 const copyrightStatus = (value: boolean | null | undefined): BookCopyrightStatus => {
   if (value === false) return 'public_domain';
@@ -68,12 +77,12 @@ export function normalizeGutendexBook(book: GutendexBook): OnlineBook | null {
   };
 }
 
-const readJson = async <T>(url: string): Promise<T> => {
+const readJson = async <T>(url: string, fetchImpl: typeof fetch = externalFetch): Promise<T> => {
   let response: Response;
   try {
     response = await fetchWithTimeout(url, SEARCH_TIMEOUT_MS, {
       headers: { Accept: 'application/json', 'User-Agent': 'SceneReader/0.1' },
-    });
+    }, fetchImpl);
   } catch (error) {
     throw new OnlineBookError('BOOK_SOURCE_UNAVAILABLE', 502, error instanceof Error ? error.message : undefined);
   }
@@ -83,11 +92,15 @@ const readJson = async <T>(url: string): Promise<T> => {
   return (await response.json()) as T;
 };
 
-export async function searchGutendex(query: string, page: number): Promise<OnlineBookSearchPage> {
+export async function searchGutendex(
+  query: string,
+  page: number,
+  options: GutendexClientOptions = {},
+): Promise<OnlineBookSearchPage> {
   const url = new URL(`${baseUrl()}/books/`);
   url.searchParams.set('search', query);
   url.searchParams.set('page', String(page));
-  const payload = await readJson<GutendexPage>(url.toString());
+  const payload = await readJson<GutendexPage>(url.toString(), options.fetchImpl);
   return {
     items: (payload.results ?? []).flatMap((book) => {
       const normalized = normalizeGutendexBook(book);

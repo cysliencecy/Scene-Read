@@ -72,10 +72,9 @@ test('Gutenberg provider delegates import arguments and returns the exact import
 });
 
 test('search uses provider pagination and preserves provider order', async () => {
-  const originalFetch = globalThis.fetch;
   const originalBaseUrl = process.env.GUTENDEX_BASE_URL;
   process.env.GUTENDEX_BASE_URL = 'https://gutendex.test';
-  globalThis.fetch = async (input) => {
+  const fetchImpl = (async (input: Parameters<typeof fetch>[0]) => {
     const url = new URL(String(input));
     assert.equal(url.searchParams.get('search'), 'jane austen');
     assert.equal(url.searchParams.get('page'), '2');
@@ -87,36 +86,33 @@ test('search uses provider pagination and preserves provider order', async () =>
         { id: 1, title: 'First', formats: { 'text/plain; charset=utf-8': 'https://www.gutenberg.org/1.txt' } },
       ],
     }), { headers: { 'content-type': 'application/json' } });
-  };
+  }) as typeof fetch;
 
   try {
-    const result = await searchGutendex('jane austen', 2);
+    const result = await searchGutendex('jane austen', 2, { fetchImpl });
     assert.deepEqual(result.items.map((book) => book.sourceBookId), ['2', '1']);
     assert.equal(result.total, 40);
     assert.equal(result.hasNextPage, true);
     assert.deepEqual(result.sourceErrors, []);
   } finally {
-    globalThis.fetch = originalFetch;
     if (originalBaseUrl === undefined) delete process.env.GUTENDEX_BASE_URL;
     else process.env.GUTENDEX_BASE_URL = originalBaseUrl;
   }
 });
 
 test('Gutenberg search failures retain the shared OnlineBookError class and code', async () => {
-  const originalFetch = globalThis.fetch;
   const originalBaseUrl = process.env.GUTENDEX_BASE_URL;
   process.env.GUTENDEX_BASE_URL = 'https://gutendex.test';
-  globalThis.fetch = async () => new Response('', { status: 503 });
+  const fetchImpl = (async () => new Response('', { status: 503 })) as typeof fetch;
 
   try {
-    await assert.rejects(searchGutendex('outage', 1), (error: unknown) => {
+    await assert.rejects(searchGutendex('outage', 1, { fetchImpl }), (error: unknown) => {
       assert.equal(error instanceof OnlineBookError, true);
       assert.equal((error as OnlineBookError).code, 'BOOK_SOURCE_UNAVAILABLE');
       assert.equal((error as OnlineBookError).status, 502);
       return true;
     });
   } finally {
-    globalThis.fetch = originalFetch;
     if (originalBaseUrl === undefined) delete process.env.GUTENDEX_BASE_URL;
     else process.env.GUTENDEX_BASE_URL = originalBaseUrl;
   }

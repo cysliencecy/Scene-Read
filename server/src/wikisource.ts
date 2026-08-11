@@ -1,6 +1,7 @@
 import { OnlineBookError } from './onlineBookProvider.js';
 import type { OnlineBookProvider } from './onlineBookProvider.js';
 import type { OnlineBookSearchPage } from './types.js';
+import { externalFetch } from './httpClient.js';
 
 const DEFAULT_WIKISOURCE_API_URL = 'https://zh.wikisource.org/w/api.php';
 const WIKISOURCE_HOSTNAME = 'zh.wikisource.org';
@@ -189,7 +190,7 @@ export async function resolveWikisourceRoot(
   if (!Number.isSafeInteger(pageId)) throw new OnlineBookError('INVALID_SOURCE_BOOK_ID', 400);
 
   const apiUrl = configuredApiUrl(options);
-  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const fetchImpl = options.fetchImpl ?? externalFetch;
   const response = await requestMediaWiki<MediaWikiRootResponse>(apiUrl, {
     prop: 'info',
     inprop: 'url|varianttitles',
@@ -323,7 +324,7 @@ export async function discoverWikisourceChapters(
 ): Promise<WikisourceChapterDescriptor[]> {
   const normalizedRootTitle = rootTitle.trim();
   const apiUrl = configuredApiUrl(options);
-  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const fetchImpl = options.fetchImpl ?? externalFetch;
   const chapters: ClassifiedChapter[] = [];
   let continuation: string | undefined;
 
@@ -423,7 +424,7 @@ export async function fetchWikisourceChapterContents(
 ): Promise<WikisourceChapterContent[]> {
   if (descriptors.length === 0) return [];
   const apiUrl = configuredApiUrl(options);
-  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const fetchImpl = options.fetchImpl ?? externalFetch;
   const batches = Array.from(
     { length: Math.ceil(descriptors.length / EXTRACT_BATCH_SIZE) },
     (_, index) => descriptors.slice(index * EXTRACT_BATCH_SIZE, (index + 1) * EXTRACT_BATCH_SIZE),
@@ -466,7 +467,7 @@ export async function searchWikisource(
   options: WikisourceClientOptions = {},
 ): Promise<OnlineBookSearchPage> {
   const apiUrl = configuredApiUrl(options);
-  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const fetchImpl = options.fetchImpl ?? externalFetch;
   const searchResponse = await requestMediaWiki<MediaWikiSearchResponse>(apiUrl, {
     list: 'search',
     srsearch: query,

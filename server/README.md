@@ -59,6 +59,7 @@ Online book search aggregates Chinese Wikisource and Project Gutenberg. The App 
 
 - Gutenberg uses Gutendex metadata and Project Gutenberg EPUB/TXT downloads. `GUTENDEX_BASE_URL` defaults to `https://gutendex.com`.
 - Chinese Wikisource uses the official MediaWiki API. `WIKISOURCE_API_URL` defaults to `https://zh.wikisource.org/w/api.php`; overrides must use that exact HTTPS hostname and API path.
+- If Node cannot reach external book sources directly, set `HTTPS_PROXY` in `server/.env` (for example `http://127.0.0.1:7897`). `NO_PROXY=localhost,127.0.0.1` keeps local callbacks direct. Proxy settings apply only to external book-source requests, not Supabase.
 - If one provider fails, search still returns the other provider's items and records the failed provider in `sourceErrors`. Only a total provider failure returns `BOOK_SOURCE_UNAVAILABLE`.
 
 Run the latest `supabase/schema.sql` before importing an online book. Search remains available without Supabase, but import returns `SUPABASE_NOT_CONFIGURED`.
