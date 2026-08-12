@@ -108,7 +108,7 @@ test('maps a Server-shaped legacy candidate to an explicit unclassified state wi
   const model = buildSceneDebugModel(legacyCandidateDetail());
 
   assert.equal(model.classificationState, 'legacy_unclassified');
-  assert.equal(model.classificationMessage, 'Legacy candidate has no canonical classification. Reclassification is required before a canonical override can be confirmed.');
+  assert.equal(model.classificationMessage, '旧版候选场景没有标准分类，需要重新分类后才能确认类型调整。');
   assert.deepEqual(model.rankedTypes, []);
   assert.equal(model.primaryConfidencePercent, null);
   assert.equal(model.canConfirmOverride, false);
@@ -128,7 +128,7 @@ test('maps exactly three ranked types, primary confidence, and the 0.65 threshol
     ],
   );
   assert.equal(model.primaryConfidencePercent, 64);
-  assert.equal(model.thresholdMessage, 'Below automatic generation threshold (0.65).');
+  assert.equal(model.thresholdMessage, '低于自动生成阈值（0.65）。');
 });
 
 test('preserves the Worker and Server serialized version, evidence, and tag field names', async () => {
@@ -155,12 +155,12 @@ test('maps audit severity and blocked status while ordering generation history n
     'attempt-old-publishable',
     'attempt-audit-failed',
   ]);
-  assert.equal(model.history[0].statusLabel, 'Blocked from reader');
+  assert.equal(model.history[0].statusLabel, '已阻止在阅读页显示');
   assert.deepEqual(model.history[0].auditRules[0], {
     rule: 'subject-count',
     passed: false,
     severity: 'severe',
-    severityLabel: 'Severe',
+    severityLabel: '严重',
     explanation: 'Too many subjects.',
   });
 });

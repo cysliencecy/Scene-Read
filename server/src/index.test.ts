@@ -109,6 +109,11 @@ before(async () => {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   await waitForServer();
+  const { response } = await request('/illustration-settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal(response.status, 200);
 });
 
 after(async () => {
@@ -116,6 +121,22 @@ after(async () => {
     server.kill();
     await once(server, 'exit');
   }
+});
+
+test('successful worker task update clears a stale failure message', async () => {
+  const failed = await request('/worker/tasks/rain-task-1', {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'failed', progress: 0, label: 'failed', errorMessage: 'old failure' }),
+  });
+  assert.equal((failed.body.data as Record<string, unknown>).errorMessage, 'old failure');
+
+  const completed = await request('/worker/tasks/rain-task-1', {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'completed', progress: 100, label: 'done' }),
+  });
+
+  assert.equal((completed.body.data as Record<string, unknown>).status, 'completed');
+  assert.equal(Object.hasOwn(completed.body.data as object, 'errorMessage'), false);
 });
 
 test('candidate debug detail includes ranked evidence, threshold state, versions, and attempts', async () => {
@@ -614,6 +635,9 @@ test('legacy character reclassification repeated after worker exit returns exist
 
   try {
     await waitForServer(isolatedUrl);
+    await requestAt(isolatedUrl, '/illustration-settings', {
+      method: 'PATCH', body: JSON.stringify({ enabled: true }),
+    });
     const candidateId = 'legacy-character-e2e';
     const requestBody = { idempotencyKey: 'legacy-dispatch-once-key' };
     const first = await requestAt(isolatedUrl, `/scene-candidates/${candidateId}/regenerations`, {

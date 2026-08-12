@@ -11,6 +11,7 @@ import {
   createBook,
   createChapter,
   createGenerationTask,
+  cancelQueuedIllustrationTasks,
   dataMode,
   deleteBook,
   findImageGenerationAttemptByKey,
@@ -18,6 +19,8 @@ import {
   getBook,
   getChapter,
   getGenerationTask,
+  getIllustrationSettings,
+  getIllustrationUsageStats,
   getSceneCandidate,
   getSceneImage,
   importBook,
@@ -29,6 +32,8 @@ import {
   listSceneImages,
   listSceneCandidates,
   updateGenerationTask,
+  updateBookIllustrations,
+  updateIllustrationSettings,
   upsertImageGenerationAttempt,
   upsertSceneCandidate,
 } from './repository.js';
@@ -41,6 +46,14 @@ import {
 } from './imagePipeline.js';
 import type { SceneCandidate, VisualProfileFact } from './types.js';
 import { buildFormalWorkerArguments, shouldAutoRunWorker } from './workerDispatch.js';
+import {
+  enableBookSourceVersion,
+  importBookSourceConfig,
+  listBookSourceVersions,
+  removeBookSource,
+  validateBookSourceVersion,
+} from './bookSourceRegistry.js';
+import { convertLegadoSafeSubset } from './legadoConverter.js';
 
 export const app = express();
 const port = Number(process.env.PORT ?? 4000);
@@ -149,7 +162,7 @@ function runWorkerForTask(taskId: string) {
       ...buildFormalWorkerArguments({
         taskId,
         apiUrl: `http://localhost:${port}`,
-        maxImages: process.env.WORKER_MAX_IMAGES ?? '3',
+        maxImages: '1',
         environment: process.env,
       }),
     ],
@@ -187,6 +200,95 @@ app.use(express.json({ limit: process.env.JSON_BODY_LIMIT ?? '25mb' }));
 
 app.get('/health', (_request, response) => {
   response.json({ ok: true, service: 'scene-reader-api', dataMode });
+});
+
+async function assertIllustrationTaskAllowed(chapterId: string) {
+  const settings = await getIllustrationSettings();
+  if (!settings.enabled) throw new Error('ILLUSTRATION_SERVICE_DISABLED');
+  const chapter = await getChapter(chapterId);
+  if (!chapter) throw new Error('CHAPTER_NOT_FOUND');
+  const book = await getBook(chapter.bookId);
+  if (!book) throw new Error('BOOK_NOT_FOUND');
+  if (!book.illustrationsEnabled) throw new Error('BOOK_ILLUSTRATIONS_DISABLED');
+  const stats = await getIllustrationUsageStats();
+  if (stats.taskCount >= settings.monthlyTaskLimit) throw new Error('MONTHLY_TASK_LIMIT_REACHED');
+}
+
+async function assertTaskNotCancelled(taskId: string) {
+  const task = await getGenerationTask(taskId);
+  if (task?.status === 'cancelled') throw new Error('TASK_CANCELLED');
+  return task;
+}
+
+app.get('/illustration-settings', async (_request, response, next) => {
+  try {
+    const [settings, stats] = await Promise.all([getIllustrationSettings(), getIllustrationUsageStats()]);
+    response.json({ data: { settings, stats } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/debug/book-sources', async (_request, response, next) => {
+  try { response.json({ data: await listBookSourceVersions() }); } catch (error) { next(error); }
+});
+
+app.post('/debug/book-sources/import', async (request, response, next) => {
+  try {
+    const converted = request.body?.format === 'legado'
+      ? convertLegadoSafeSubset(request.body.source)
+      : { config: request.body, issues: [] };
+    if (!converted.config) {
+      response.status(422).json({ data: { imported: false, validation: { valid: false, issues: converted.issues }, source: null } });
+      return;
+    }
+    const result = await importBookSourceConfig(converted.config);
+    response.status(result.imported ? 201 : 422).json({ data: result });
+  } catch (error) { next(error); }
+});
+
+app.post('/debug/book-sources/:sourceId/versions/:version/validate', async (request, response, next) => {
+  try {
+    response.json({ data: await validateBookSourceVersion(request.params.sourceId, Number(request.params.version), request.body ?? {}) });
+  } catch (error) { next(error); }
+});
+
+app.post('/debug/book-sources/:sourceId/versions/:version/enable', async (request, response, next) => {
+  try {
+    response.json({ data: await enableBookSourceVersion(request.params.sourceId, Number(request.params.version)) });
+  } catch (error) { next(error); }
+});
+
+app.delete('/debug/book-sources/:sourceId', async (request, response, next) => {
+  try { response.json({ data: await removeBookSource(request.params.sourceId) }); } catch (error) { next(error); }
+});
+
+app.patch('/illustration-settings', async (request, response, next) => {
+  try {
+    const enabled = request.body?.enabled;
+    const monthlyTaskLimit = request.body?.monthlyTaskLimit;
+    if (enabled !== undefined && typeof enabled !== 'boolean') throw new Error('INVALID_ILLUSTRATION_SETTINGS');
+    if (monthlyTaskLimit !== undefined && !Number.isInteger(monthlyTaskLimit)) throw new Error('INVALID_MONTHLY_TASK_LIMIT');
+    const settings = await updateIllustrationSettings({ enabled, monthlyTaskLimit });
+    const cancelledQueuedTasks = settings.enabled ? 0 : await cancelQueuedIllustrationTasks();
+    response.json({ data: { settings, stats: await getIllustrationUsageStats(), cancelledQueuedTasks } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/books/:bookId/illustration-settings', async (request, response, next) => {
+  try {
+    if (typeof request.body?.enabled !== 'boolean') throw new Error('INVALID_ILLUSTRATION_SETTINGS');
+    const book = await updateBookIllustrations(request.params.bookId, request.body.enabled);
+    if (!book) {
+      response.status(404).json({ error: 'BOOK_NOT_FOUND' });
+      return;
+    }
+    response.json({ data: book });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/online-books/search', async (request, response, next) => {
@@ -324,6 +426,8 @@ app.post('/chapters/:chapterId/generation-task', async (request, response, next)
       return;
     }
 
+    await assertIllustrationTaskAllowed(request.params.chapterId);
+
     const task = await createGenerationTask({
       ...request.body,
       chapterId: request.params.chapterId,
@@ -390,6 +494,7 @@ app.get('/scene-images', async (_request, response, next) => {
 
 app.post('/generation-tasks', async (request, response, next) => {
   try {
+    await assertIllustrationTaskAllowed(request.body?.chapterId);
     response.status(201).json({ data: await createGenerationTask(request.body) });
   } catch (error) {
     next(error);
@@ -425,6 +530,8 @@ app.post('/generation-tasks/:taskId/retry', async (request, response, next) => {
       return;
     }
 
+    await assertIllustrationTaskAllowed(task.chapterId);
+
     const retriedTask = await updateGenerationTask(task.id, {
       status: 'queued',
       progress: 0,
@@ -442,7 +549,7 @@ app.post('/generation-tasks/:taskId/retry', async (request, response, next) => {
 
 app.get('/worker/tasks/:taskId/chapter-payload', async (request, response, next) => {
   try {
-    const task = await getGenerationTask(request.params.taskId);
+    const task = await assertTaskNotCancelled(request.params.taskId);
 
     if (!task) {
       response.status(404).json({ error: 'TASK_NOT_FOUND' });
@@ -495,6 +602,7 @@ app.get('/worker/tasks/:taskId/chapter-payload', async (request, response, next)
 
 app.patch('/worker/tasks/:taskId', async (request, response, next) => {
   try {
+    await assertTaskNotCancelled(request.params.taskId);
     response.json({ data: await updateGenerationTask(request.params.taskId, request.body) });
   } catch (error) {
     next(error);
@@ -519,6 +627,7 @@ app.get('/scene-images/:imageId', async (request, response, next) => {
 app.post('/worker/scene-candidates', async (request, response, next) => {
   try {
     const callback = parseWorkerCandidateCallback(request.body);
+    await assertTaskNotCancelled(callback.taskId);
     const candidates = await Promise.all(callback.candidates.map((candidate, index) => upsertSceneCandidate({
       id: candidate.id,
       taskId: callback.taskId,
@@ -543,6 +652,7 @@ app.post('/worker/scene-candidates', async (request, response, next) => {
 app.post('/worker/image-generation-attempts', async (request, response, next) => {
   try {
     const callback = parseAttemptCallback(request.body);
+    await assertTaskNotCancelled(callback.taskId);
     const candidate = await getSceneCandidate(callback.candidateId);
     if (!candidate) throw new ApiInputError(API_ERROR_CODES.candidateNotFound, 404);
     const existing = await findImageGenerationAttemptByKey(callback.idempotencyKey);
@@ -601,6 +711,7 @@ app.post('/scene-candidates/:candidateId/regenerations', async (request, respons
         response.status(202).json({ data: { task: existingTask, instruction } });
         return;
       }
+      await assertIllustrationTaskAllowed(candidate.chapterId);
       const task = await createGenerationTask({
         id: taskId,
         bookId: candidate.bookId,
@@ -627,6 +738,8 @@ app.post('/scene-candidates/:candidateId/regenerations', async (request, respons
       response.json({ data: { task, attempt: existing } });
       return;
     }
+
+    await assertIllustrationTaskAllowed(candidate.chapterId);
 
     const priorAttempts = await listImageGenerationAttempts(candidate.id);
     const parentAttempt = priorAttempts.at(-1);
@@ -675,6 +788,40 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
       error: 'SUPABASE_NOT_CONFIGURED',
       message: 'Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to enable persistent writes.',
     });
+    return;
+  }
+  if (error instanceof Error && [
+    'INVALID_ILLUSTRATION_SETTINGS',
+    'INVALID_MONTHLY_TASK_LIMIT',
+  ].includes(error.message)) {
+    response.status(400).json({ error: error.message });
+    return;
+  }
+  if (error instanceof Error && [
+    'BOOK_SOURCE_VERSION_NOT_NEWER',
+    'BOOK_SOURCE_VALIDATION_REQUIRED',
+  ].includes(error.message)) {
+    response.status(409).json({ error: error.message });
+    return;
+  }
+  if (error instanceof Error && error.message === 'BOOK_SOURCE_ENABLE_LIMIT_REACHED') {
+    response.status(409).json({ error: error.message });
+    return;
+  }
+  if (error instanceof Error && error.message === 'BOOK_SOURCE_NOT_FOUND') {
+    response.status(404).json({ error: error.message });
+    return;
+  }
+  if (error instanceof Error && [
+    'ILLUSTRATION_SERVICE_DISABLED',
+    'BOOK_ILLUSTRATIONS_DISABLED',
+    'TASK_CANCELLED',
+  ].includes(error.message)) {
+    response.status(409).json({ error: error.message });
+    return;
+  }
+  if (error instanceof Error && error.message === 'MONTHLY_TASK_LIMIT_REACHED') {
+    response.status(429).json({ error: error.message });
     return;
   }
 

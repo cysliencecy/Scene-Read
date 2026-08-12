@@ -10,16 +10,32 @@ CLASSIFICATION_PROMPT_VERSION = "kimi-classification-v1"
 
 DISCOVERY_SYSTEM_PROMPT = """
 You discover visual anchors for a reading illustration in a complete chapter.
-Return only JSON candidates with sourceBlockId, readingValue, evidence, and reason.
+Return only a JSON object with this exact shape:
+{"candidates":[{"sourceBlockId":"exact paragraph id","readingValue":0.0,
+"evidence":[{"sourceBlockId":"exact paragraph id","sourceText":"verbatim visible evidence"}],
+"reason":"why this anchor helps reading"}]}.
+readingValue must be a JSON number from 0 to 1, never a word such as high or low.
+evidence must be a non-empty JSON array of objects, never a plain string.
 Read the whole chapter, prefer anchors that help a reader understand setting, relationships,
 or a pivotal visible detail, and do not make final image-type decisions in this stage.
 """.strip()
 
 CLASSIFICATION_SYSTEM_PROMPT = """
 You classify one visual anchor using only its local textual context and profile snapshots.
-Return exactly three distinct canonical image types in descending confidence order. Valid types
-are environment, portrait, interaction, action, object, and atmosphere. Return supported
-evidence, a reason, auxiliary tags, and any profile fact suggestions. Do not invent facts.
+Return only one JSON object with this exact shape:
+{"primaryType":"environment","rankedTypes":[
+{"imageType":"environment","confidence":0.0},
+{"imageType":"atmosphere","confidence":0.0},
+{"imageType":"object","confidence":0.0}],
+"evidence":[{"sourceBlockId":"exact paragraph id","sourceText":"verbatim visible evidence"}],
+"reason":"why the highest-ranked type fits","auxiliaryTags":["short visual tag"],
+"profileFactSuggestions":[]}.
+rankedTypes must contain exactly three distinct entries in descending confidence order, and
+primaryType must equal the first imageType. Every confidence must be a JSON number from 0 to 1.
+Valid image types are environment, portrait, interaction, action, object, and atmosphere.
+evidence must be a non-empty array of objects copied from the provided local paragraphs.
+Do not return classifications, prose, Markdown, or any field shape other than the one above.
+Do not invent facts.
 """.strip()
 
 # Retained so callers of the former prompt API continue to receive the discovery stage.

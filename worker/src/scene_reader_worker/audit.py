@@ -14,6 +14,13 @@ from .types import (
 )
 
 
+DEMO_AUDIT_BYPASS_VERSION = "demo-audit-bypass-v1"
+
+
+def demo_audit_bypass_enabled() -> bool:
+    return os.getenv("DEMO_SKIP_IMAGE_AUDIT", "").strip().lower() == "true"
+
+
 def _required_text(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"Audit requires non-empty string {name}.")
@@ -83,6 +90,22 @@ def audit_image(
     artifact: GeneratedImageArtifact,
     request: ImageGenerationRequest,
 ) -> ImageAuditResult:
+    if demo_audit_bypass_enabled():
+        return ImageAuditResult(
+            verdict="publishable",
+            rules=(
+                ImageAuditRuleResult(
+                    rule="demo-audit-bypass",
+                    passed=True,
+                    severity="warning",
+                    explanation="Image audit was explicitly skipped for the private demo build.",
+                ),
+            ),
+            severeFactConflict=False,
+            provider="demo-bypass",
+            model="none",
+            auditVersion=DEMO_AUDIT_BYPASS_VERSION,
+        )
     endpoint, model, version = _audit_configuration()
     body = {
         "model": model,

@@ -1,4 +1,13 @@
-import type { Book, Chapter, GenerationTask, SceneCandidate, SceneImage } from '../types/app';
+import type {
+  Book,
+  BookSourceVersion,
+  Chapter,
+  GenerationTask,
+  IllustrationSettings,
+  IllustrationUsageStats,
+  SceneCandidate,
+  SceneImage,
+} from '../types/app';
 
 import type {
   OnlineBookImportResult,
@@ -67,6 +76,16 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return payload.data;
 }
 
+async function patchJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw await apiError(path, response);
+  return ((await response.json()) as ApiResponse<T>).data;
+}
+
 async function deleteJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'DELETE',
@@ -84,13 +103,66 @@ export async function fetchBooks() {
   return getJson<Book[]>('/books');
 }
 
+export type IllustrationSettingsResponse = {
+  settings: IllustrationSettings;
+  stats: IllustrationUsageStats;
+  cancelledQueuedTasks?: number;
+};
+
+export async function fetchIllustrationSettings() {
+  return getJson<IllustrationSettingsResponse>('/illustration-settings');
+}
+
+export async function saveIllustrationSettings(input: Partial<IllustrationSettings>) {
+  return patchJson<IllustrationSettingsResponse>('/illustration-settings', input);
+}
+
+export async function saveBookIllustrationSetting(bookId: string, enabled: boolean) {
+  return patchJson<Book>(`/books/${encodeURIComponent(bookId)}/illustration-settings`, { enabled });
+}
+
+export async function fetchPrivateBookSources() {
+  return getJson<BookSourceVersion[]>('/debug/book-sources');
+}
+
+export async function importPrivateBookSource(source: unknown, format: 'scene-read' | 'legado') {
+  const path = '/debug/book-sources/import';
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(format === 'legado' ? { format: 'legado', source } : source),
+  });
+  const payload = await response.json() as ApiResponse<{
+    imported: boolean;
+    validation: { valid: boolean; issues: Array<{ path: string; code: string; message: string }> };
+    source: BookSourceVersion | null;
+  }>;
+  if (!response.ok && !payload.data?.validation) throw await apiError(path, response);
+  return payload.data;
+}
+
+export async function validatePrivateBookSource(sourceId: string, version: number, variables: Record<string, string>) {
+  return postJson<{ valid: boolean; issues: Array<{ path: string; code: string; message: string }> }>(
+    `/debug/book-sources/${encodeURIComponent(sourceId)}/versions/${version}/validate`, variables,
+  );
+}
+
+export async function enablePrivateBookSource(sourceId: string, version: number) {
+  return postJson<BookSourceVersion>(`/debug/book-sources/${encodeURIComponent(sourceId)}/versions/${version}/enable`, {});
+}
+
 export async function searchOnlineBooks(query: string, page = 1) {
   const params = new URLSearchParams({ q: query, page: String(page) });
   return getJson<OnlineBookSearchPage>(`/online-books/search?${params.toString()}`);
 }
 
 export const onlineBookSourceLabel = (source: OnlineBookSource) =>
-  source === 'wikisource' ? '中文维基文库' : 'Project Gutenberg';
+  source === 'wikisource'
+    ? '中文维基文库'
+    : source === 'chinese_poetry'
+      ? '中华古诗文开源库'
+      : source === 'private_json'
+        ? '私有书源'
+        : 'Project Gutenberg';
 
 export const onlineBookSourceWarning = (error: OnlineBookSourceError) =>
   `${onlineBookSourceLabel(error.source)}暂时不可用，已显示其它可用书源。`;

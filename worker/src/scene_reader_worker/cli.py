@@ -8,7 +8,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .audit import audit_image
+from .audit import DEMO_AUDIT_BYPASS_VERSION, audit_image, demo_audit_bypass_enabled
 from .composition import build_generation_prompt, get_composition_contract
 from .image_generator import generate_formal_image, target_image_count_for_paragraphs
 from .pipeline import generation_attempt_callback_payload, run_generation_attempt
@@ -77,6 +77,44 @@ def _post_to_api(api_url: str, payload: object) -> None:
 
 def _post_attempt_to_api(api_url: str, payload: object) -> None:
     _request_json(f"{api_url.rstrip('/')}/worker/image-generation-attempts", method="POST", payload=payload)
+
+
+def _automatic_task_terminal(
+    attempts: list[dict[str, Any]],
+    *,
+    provider: str,
+    duration_ms: int,
+) -> dict[str, Any]:
+    statuses = [str(attempt.get("status") or "unknown") for attempt in attempts]
+    if "publishable" in statuses:
+        return {
+            "status": "completed",
+            "progress": 100,
+            "label": "阅读辅助图已生成",
+            "provider": provider,
+            "durationMs": duration_ms,
+        }
+    if "audit_failed" in statuses:
+        label = "阅读辅助图审核失败"
+    elif "blocked" in statuses:
+        label = "阅读辅助图未通过审核"
+    elif "generation_failed" in statuses:
+        label = "阅读辅助图生成失败"
+    else:
+        label = "未找到可生成的阅读辅助图"
+    return {
+        "status": "failed",
+        "progress": 0,
+        "label": label,
+        "errorMessage": f"No publishable image attempt ({', '.join(statuses) or 'no eligible candidate'}).",
+        "provider": provider,
+        "durationMs": duration_ms,
+    }
+
+
+def _automatic_attempt_key(task_id: str, candidate_id: str) -> str:
+    suffix = f":{DEMO_AUDIT_BYPASS_VERSION}" if demo_audit_bypass_enabled() else ""
+    return f"{task_id}:{candidate_id}{suffix}"
 
 
 def _profile_fact(payload: dict[str, Any]) -> VisualProfileFact:
@@ -243,7 +281,7 @@ def main() -> int:
                     auxiliary_tags=classification.auxiliaryTags,
                 )
                 request = ImageGenerationRequest(
-                    idempotencyKey=f"{payload['taskId']}:{candidate.seed.id}",
+                    idempotencyKey=_automatic_attempt_key(payload["taskId"], candidate.seed.id),
                     candidateId=candidate.seed.id,
                     taskId=payload["taskId"],
                     trigger="automatic",
@@ -279,13 +317,11 @@ def main() -> int:
                 _patch_task(
                     args.api_url,
                     args.task_id,
-                    {
-                        "status": "completed",
-                        "progress": 100,
-                        "label": "阅读辅助图已生成",
-                        "provider": processed.provider,
-                        "durationMs": int((time.perf_counter() - started_at) * 1000),
-                    },
+                    _automatic_task_terminal(
+                        result.get("attempts", []),
+                        provider=processed.provider,
+                        duration_ms=int((time.perf_counter() - started_at) * 1000),
+                    ),
                 )
 
         if not args.output:

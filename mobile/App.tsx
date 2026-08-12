@@ -7,6 +7,7 @@ import {
   fetchChapter,
   fetchChapters,
   fetchGenerationTasks,
+  fetchIllustrationSettings,
   fetchSceneImages,
   importBook,
   importOnlineBook,
@@ -14,7 +15,8 @@ import {
   onlineBookErrorMessage,
   fetchSceneCandidateDetails,
   requestManualRegeneration,
-  retryGenerationTask,
+  saveBookIllustrationSetting,
+  saveIllustrationSettings,
   searchOnlineBooks,
   submitChapterGenerationTask,
 } from './src/api/client';
@@ -33,6 +35,7 @@ import {
   type AppRoute,
 } from './src/navigation/routes';
 import { ImportScreen } from './src/screens/ImportScreen';
+import { BookSourceDebugScreen } from './src/screens/BookSourceDebugScreen';
 import { ReaderScreen, type ReaderChapterEntry } from './src/screens/ReaderScreen';
 import { loadLastReaderChapter, saveLastReaderChapter } from './src/reader/storage';
 import { withReaderGeneratedBlocks } from './src/reader/generatedBlocks';
@@ -47,6 +50,7 @@ import type {
   CanonicalImageType,
   Chapter,
   GenerationTask,
+  IllustrationSettings,
   SceneCandidateDebugDetail,
   SceneImage,
   VisualStyle,
@@ -83,6 +87,9 @@ export default function App() {
   const [readerChapterEntry, setReaderChapterEntry] = useState<ReaderChapterEntry>('saved');
   const [isEditingShelf, setIsEditingShelf] = useState(false);
   const [selectedImportedBookIds, setSelectedImportedBookIds] = useState<string[]>([]);
+  const [illustrationSettings, setIllustrationSettings] = useState<IllustrationSettings>({ enabled: false, monthlyTaskLimit: 100 });
+  const [illustrationSettingsError, setIllustrationSettingsError] = useState<string | null>(null);
+  const [isSavingIllustrationSettings, setIsSavingIllustrationSettings] = useState(false);
   const route = navigation.route;
 
   const currentBook = useMemo(() => {
@@ -108,10 +115,11 @@ export default function App() {
 
     async function loadInitialApiData() {
       try {
-        const [apiBooks, apiTasks, apiImages] = await Promise.all([
+        const [apiBooks, apiTasks, apiImages, illustrationData] = await Promise.all([
           fetchBooks(),
           fetchGenerationTasks(),
           fetchSceneImages(),
+          fetchIllustrationSettings(),
         ]);
 
         if (cancelled) return;
@@ -119,6 +127,7 @@ export default function App() {
         setGenerationTasks(apiTasks);
         setSceneImages(apiImages);
         setSceneCandidates([]);
+        setIllustrationSettings(illustrationData.settings);
         setApiStatus('connected');
       } catch {
         if (cancelled) return;
@@ -234,8 +243,16 @@ export default function App() {
   }, [currentChapter, route.name, syncingBookIds]);
 
   useEffect(() => {
-    if (route.name !== 'Reader' || !currentChapter || syncingBookIds.includes(currentChapter.bookId)) return;
-    const hasChapterTask = generationTasks.some((task) => task.chapterId === currentChapter.id);
+    if (
+      route.name !== 'Reader' ||
+      !currentChapter ||
+      !illustrationSettings.enabled ||
+      !currentBook?.illustrationsEnabled ||
+      syncingBookIds.includes(currentChapter.bookId)
+    ) return;
+    const hasChapterTask = generationTasks.some(
+      (task) => task.chapterId === currentChapter.id && task.status !== 'cancelled',
+    );
     const hasChapterImage = sceneImages.some((image) => image.chapterId === currentChapter.id);
     if (hasChapterTask || hasChapterImage) return;
 
@@ -256,7 +273,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentChapter, generationTasks, route.name, sceneImages, syncingBookIds]);
+  }, [currentBook?.illustrationsEnabled, currentChapter, generationTasks, illustrationSettings.enabled, route.name, sceneImages, syncingBookIds]);
 
   const navigate = (nextRoute: AppRoute) => {
     setNavigation((current) => ({ ...current, route: nextRoute }));
@@ -366,34 +383,32 @@ export default function App() {
     setNavigation((current) => ({ ...current, visualStyle }));
   };
 
-  const retrySceneGeneration = async (taskId: string) => {
-    setGenerationTasks((current) =>
-      current.map((task) =>
-        task.id === taskId
-          ? { ...task, status: 'queued', progress: 0, label: '场景图生成已重新排队', errorMessage: undefined }
-          : task,
-      ),
-    );
-
+  const updateGlobalIllustrationSettings = async (input: Partial<IllustrationSettings>) => {
+    setIllustrationSettingsError(null);
+    setIsSavingIllustrationSettings(true);
     try {
-      const retriedTask = await retryGenerationTask(taskId);
-      setGenerationTasks((current) => [...current.filter((task) => task.id !== retriedTask.id), retriedTask]);
+      const result = await saveIllustrationSettings(input);
+      setIllustrationSettings(result.settings);
+      if (!result.settings.enabled) setGenerationTasks(await fetchGenerationTasks());
       setApiStatus('connected');
     } catch (error) {
-      setGenerationTasks((current) =>
-        current.map((task) =>
-          task.id === taskId
-            ? {
-                ...task,
-                status: 'failed',
-                progress: 0,
-                label: '场景图重新生成失败',
-                errorMessage: error instanceof Error ? error.message : 'Retry request failed',
-              }
-            : task,
-        ),
-      );
-      setApiStatus((current) => (current === 'connected' ? current : 'fallback'));
+      setIllustrationSettingsError(error instanceof Error ? error.message : '插图设置保存失败');
+    } finally {
+      setIsSavingIllustrationSettings(false);
+    }
+  };
+
+  const updateBookIllustrationSetting = async (bookId: string, enabled: boolean) => {
+    setIllustrationSettingsError(null);
+    setIsSavingIllustrationSettings(true);
+    try {
+      const book = await saveBookIllustrationSetting(bookId, enabled);
+      setShelfBooks((current) => current.map((item) => item.id === book.id ? book : item));
+      setApiStatus('connected');
+    } catch (error) {
+      setIllustrationSettingsError(error instanceof Error ? error.message : '书籍插图设置保存失败');
+    } finally {
+      setIsSavingIllustrationSettings(false);
     }
   };
 
@@ -535,7 +550,11 @@ export default function App() {
       return;
     }
 
-    const importedBook = { ...draft.book, visualStyle: navigation.visualStyle };
+    const importedBook = {
+      ...draft.book,
+      visualStyle: navigation.visualStyle,
+      illustrationsEnabled: illustrationSettings.enabled,
+    };
     const pendingTask: GenerationTask = {
       id: `task-${importedBook.currentChapterId}-scene-image`,
       bookId: importedBook.id,
@@ -554,7 +573,9 @@ export default function App() {
       });
       return next;
     });
-    setGenerationTasks((current) => [...current.filter((task) => task.id !== pendingTask.id), pendingTask]);
+    if (importedBook.illustrationsEnabled) {
+      setGenerationTasks((current) => [...current.filter((task) => task.id !== pendingTask.id), pendingTask]);
+    }
     setSyncingBookIds((current) => [...current.filter((id) => id !== importedBook.id), importedBook.id]);
     setNavigation((current) => ({
       ...current,
@@ -575,11 +596,13 @@ export default function App() {
           { ...persisted.book, visualStyle: navigation.visualStyle },
           ...current.filter((book) => book.id !== persisted.book.id),
         ]);
-        const generationTask = await submitChapterGenerationTask(persisted.book.currentChapterId);
-        setGenerationTasks((current) => [
-          ...current.filter((task) => task.id !== generationTask.id),
-          generationTask,
-        ]);
+        if (persisted.book.illustrationsEnabled && illustrationSettings.enabled) {
+          const generationTask = await submitChapterGenerationTask(persisted.book.currentChapterId);
+          setGenerationTasks((current) => [
+            ...current.filter((task) => task.id !== generationTask.id),
+            generationTask,
+          ]);
+        }
         setApiStatus('connected');
       } catch (error) {
         const failedTask: GenerationTask = {
@@ -603,6 +626,7 @@ export default function App() {
       navigate({ name: 'Reader' });
     }
     if (route.name === 'Reader') navigate({ name: 'Shelf' });
+    if (route.name === 'BookSourceDebug') navigate({ name: 'Shelf' });
     if (route.name === 'Style') navigate({ name: 'Import' });
     if (route.name === 'Import') navigate({ name: 'Shelf' });
   };
@@ -632,6 +656,13 @@ export default function App() {
             }}
             onRemoveSelectedImportedBooks={removeSelectedImportedBooks}
             onRead={openBook}
+            illustrationsEnabled={illustrationSettings.enabled}
+            illustrationToggleDisabled={isSavingIllustrationSettings}
+            illustrationError={illustrationSettingsError}
+            onOpenBookSourceDebug={__DEV__ ? () => navigate({ name: 'BookSourceDebug' }) : undefined}
+            onToggleIllustrations={(enabled) => {
+              void updateGlobalIllustrationSettings({ enabled });
+            }}
             onToggleBookSelection={toggleBookSelection}
             onToggleEditingShelf={toggleShelfEditing}
           />
@@ -671,6 +702,7 @@ export default function App() {
             onStart={completeImport}
           />
         )}
+        {route.name === 'BookSourceDebug' && <BookSourceDebugScreen />}
         {route.name === 'Reader' &&
           (renderedChapter ? (
             <ReaderScreen
@@ -678,13 +710,17 @@ export default function App() {
               chapters={currentBookChapters.length > 0 ? currentBookChapters : [renderedChapter]}
               chapterEntry={readerChapterEntry}
               generationTasks={generationTasks}
+              illustrationsEnabled={currentBook?.illustrationsEnabled ?? false}
+              illustrationToggleDisabled={isSavingIllustrationSettings}
               sceneImages={sceneImages}
               onBack={goBack}
               onChapterChange={selectReaderChapter}
               onOpenSceneDebug={() => {
                 navigate({ name: 'SceneDebug' });
               }}
-              onRetryGenerationTask={retrySceneGeneration}
+              onToggleIllustrations={(enabled) => {
+                if (currentBook) void updateBookIllustrationSetting(currentBook.id, enabled);
+              }}
             />
           ) : (
             <View style={styles.emptyReader}>

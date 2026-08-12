@@ -2,7 +2,7 @@ export type VisualStyle = '写实' | '动漫' | '插画';
 
 export type BookCopyrightStatus = 'public_domain' | 'authorized' | 'unknown';
 
-export type OnlineBookSource = 'gutenberg' | 'wikisource';
+export type OnlineBookSource = 'gutenberg' | 'wikisource' | 'chinese_poetry' | 'private_json';
 
 export type OnlineBookSourceError = {
   source: OnlineBookSource;
@@ -25,6 +25,21 @@ export type Book = {
   sourceUrl?: string;
   sourceAttribution?: string;
   copyrightStatus?: BookCopyrightStatus;
+  illustrationsEnabled?: boolean;
+};
+
+export type IllustrationSettings = {
+  enabled: boolean;
+  monthlyTaskLimit: number;
+};
+
+export type IllustrationUsageStats = {
+  month: string;
+  taskCount: number;
+  successCount: number;
+  failureCount: number;
+  monthlyTaskLimit: number;
+  remainingTasks: number;
 };
 
 export type OnlineBook = {
@@ -167,12 +182,13 @@ export type GenerationTask = {
   bookId?: string;
   chapterId: string;
   progress: number;
-  status: 'queued' | 'recognizing' | 'generating' | 'completed' | 'failed';
+  status: 'queued' | 'recognizing' | 'generating' | 'completed' | 'failed' | 'cancelled';
   taskType?: 'scene_image';
   label: string;
   errorMessage?: string;
   provider?: string;
   durationMs?: number;
+  createdAt?: string;
 };
 
 export type SceneImage = {

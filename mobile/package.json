@@ -28,6 +28,7 @@
     "test:scene-placement": "tsx scripts/test-scene-placement.ts",
     "test:reader-pagination": "tsx scripts/test-reader-pagination.ts",
     "test:scene-debug": "tsx --test src/screens/sceneDebugModel.test.ts",
+    "test:chapter-image-status": "tsx --test src/components/chapterImageStatus.test.ts",
     "test:txt-import": "tsx scripts/test-txt-import.ts"
   },
   "private": true

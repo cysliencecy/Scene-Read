@@ -8,6 +8,7 @@ from scene_reader_worker.image_generator import (
 from scene_reader_worker.ai_client import (
     DEFAULT_AI_BASE_URL,
     DEFAULT_AI_MODEL,
+    _extract_json_object,
     _get_api_key,
 )
 from scene_reader_worker.pipeline import generation_attempt_callback_payload, run_generation_attempt
@@ -16,7 +17,11 @@ from scene_reader_worker.processor import (
     formal_generation_eligible,
     process_chapter,
 )
-from scene_reader_worker.prompt import build_scene_recognition_user_prompt
+from scene_reader_worker.prompt import (
+    CLASSIFICATION_SYSTEM_PROMPT,
+    DISCOVERY_SYSTEM_PROMPT,
+    build_scene_recognition_user_prompt,
+)
 from scene_reader_worker.types import (
     CandidateClassification,
     CandidateSeed,
@@ -29,6 +34,7 @@ from scene_reader_worker.types import (
     VisualEvidence,
 )
 from scene_reader_worker.validator import validate_ai_candidates
+from scene_reader_worker.validator import validate_discovery_candidates
 
 
 SAMPLE_PAYLOAD = {
@@ -193,6 +199,56 @@ class ProcessorTest(unittest.TestCase):
         ):
             self.assertEqual(_get_api_key(DEFAULT_AI_BASE_URL), "kimi-key")
 
+    def test_kimi_json_parser_ignores_content_after_first_complete_object(self) -> None:
+        response = """```json
+{"candidates": [{"sourceBlockId": "p1"}]}
+```
+{"explanation": "additional model output"}
+"""
+
+        parsed = _extract_json_object(response)
+
+        self.assertEqual(parsed, {"candidates": [{"sourceBlockId": "p1"}]})
+
+    def test_kimi_json_parser_wraps_top_level_candidate_array(self) -> None:
+        response = """```json
+[
+  {"sourceBlockId": "p1", "readingValue": 0.91},
+  {"sourceBlockId": "p7", "readingValue": 0.84}
+]
+```"""
+
+        parsed = _extract_json_object(response)
+
+        self.assertEqual(
+            parsed,
+            {
+                "candidates": [
+                    {"sourceBlockId": "p1", "readingValue": 0.91},
+                    {"sourceBlockId": "p7", "readingValue": 0.84},
+                ]
+            },
+        )
+
+    def test_discovery_validator_normalizes_kimi_qualitative_candidate_fields(self) -> None:
+        candidates, logs = validate_discovery_candidates(
+            SAMPLE_PAYLOAD,
+            [
+                {
+                    "sourceBlockId": "p1",
+                    "readingValue": "高",
+                    "evidence": "夜里，街道上的风很冷。",
+                    "reason": "建立夜间街道环境。",
+                }
+            ],
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].readingValue, 0.9)
+        self.assertEqual(candidates[0].evidence[0].sourceBlockId, "p1")
+        self.assertEqual(candidates[0].evidence[0].sourceText, "夜里，街道上的风很冷。")
+        self.assertEqual(logs[-1].data, {"count": 1})
+
     def test_process_chapter_outputs_scene_candidates_with_heuristic_provider(self) -> None:
         result = process_chapter(SAMPLE_PAYLOAD, provider="heuristic")
 
@@ -211,6 +267,12 @@ class ProcessorTest(unittest.TestCase):
         self.assertIn("chapter-1", prompt)
         self.assertIn("id=p1", prompt)
         self.assertIn("街道上的风很冷", prompt)
+
+    def test_kimi_prompts_define_strict_json_field_shapes(self) -> None:
+        self.assertIn('"readingValue":0.0', DISCOVERY_SYSTEM_PROMPT)
+        self.assertIn('"evidence":[', DISCOVERY_SYSTEM_PROMPT)
+        self.assertIn('"rankedTypes":[', CLASSIFICATION_SYSTEM_PROMPT)
+        self.assertIn('exactly three', CLASSIFICATION_SYSTEM_PROMPT)
 
     def test_validate_ai_candidates_rejects_unknown_source_block(self) -> None:
         candidates, logs = validate_ai_candidates(

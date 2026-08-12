@@ -16,6 +16,7 @@ create table if not exists public.books (
   source_url text,
   source_attribution text,
   copyright_status text check (copyright_status in ('public_domain', 'authorized', 'unknown')),
+  illustrations_enabled boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -36,6 +37,7 @@ alter table public.books add column if not exists source_book_id text;
 alter table public.books add column if not exists source_url text;
 alter table public.books add column if not exists source_attribution text;
 alter table public.books add column if not exists copyright_status text;
+alter table public.books add column if not exists illustrations_enabled boolean not null default false;
 alter table public.books drop constraint if exists books_copyright_status_check;
 alter table public.books
   add constraint books_copyright_status_check check (copyright_status in ('public_domain', 'authorized', 'unknown'));
@@ -64,6 +66,9 @@ alter table public.chapters
 drop function if exists public.import_online_book(
   text[], text, jsonb, text, text, text[], text, text, text, text, text
 );
+drop function if exists public.import_online_book(
+  text[], text, jsonb, text, text, text[], text, text, text, text, text, text
+);
 
 create or replace function public.import_online_book(
   p_authors text[],
@@ -77,7 +82,8 @@ create or replace function public.import_online_book(
   p_source_url text,
   p_title text,
   p_visual_style text,
-  p_source_attribution text default null
+  p_source_attribution text default null,
+  p_illustrations_enabled boolean default false
 )
 returns public.books
 language plpgsql
@@ -92,10 +98,12 @@ begin
 
   insert into public.books (
     id, title, progress, accent, current_chapter_id, last_read_label, visual_style,
-    authors, languages, cover_path, source, source_book_id, source_url, source_attribution, copyright_status
+    authors, languages, cover_path, source, source_book_id, source_url, source_attribution, copyright_status,
+    illustrations_enabled
   ) values (
     p_book_id, p_title, '新导入', '#426f76', p_chapters->0->>'id', '准备开始第一章', p_visual_style,
-    p_authors, p_languages, p_cover_path, p_source, p_source_book_id, p_source_url, p_source_attribution, p_copyright_status
+    p_authors, p_languages, p_cover_path, p_source, p_source_book_id, p_source_url, p_source_attribution, p_copyright_status,
+    p_illustrations_enabled
   ) returning * into imported_book;
 
   for chapter in select value, ordinality from jsonb_array_elements(p_chapters) with ordinality
@@ -120,7 +128,7 @@ create table if not exists public.generation_tasks (
   book_id text references public.books(id) on delete cascade,
   chapter_id text not null references public.chapters(id) on delete cascade,
   progress integer not null default 0 check (progress >= 0 and progress <= 100),
-  status text not null default 'queued' check (status in ('queued', 'recognizing', 'generating', 'completed', 'failed')),
+  status text not null default 'queued' check (status in ('queued', 'recognizing', 'generating', 'completed', 'failed', 'cancelled')),
   task_type text not null default 'scene_image' check (task_type in ('scene_image')),
   label text not null,
   error_message text,
@@ -137,7 +145,33 @@ alter table public.generation_tasks add column if not exists provider text;
 alter table public.generation_tasks add column if not exists duration_ms integer;
 alter table public.generation_tasks drop constraint if exists generation_tasks_status_check;
 alter table public.generation_tasks
-  add constraint generation_tasks_status_check check (status in ('queued', 'recognizing', 'generating', 'completed', 'failed'));
+  add constraint generation_tasks_status_check check (status in ('queued', 'recognizing', 'generating', 'completed', 'failed', 'cancelled'));
+
+create table if not exists public.app_settings (
+  id text primary key default 'single-user' check (id = 'single-user'),
+  illustrations_enabled boolean not null default false,
+  monthly_task_limit integer not null default 100 check (monthly_task_limit between 1 and 10000),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+insert into public.app_settings (id) values ('single-user') on conflict (id) do nothing;
+
+create table if not exists public.book_source_versions (
+  id uuid primary key default gen_random_uuid(),
+  source_id text not null,
+  version integer not null check (version >= 1),
+  name text not null,
+  config jsonb not null,
+  validation jsonb,
+  validated_at timestamptz,
+  enabled boolean not null default false,
+  removed_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique (source_id, version)
+);
+create unique index if not exists book_source_one_enabled_version
+  on public.book_source_versions(source_id) where enabled and removed_at is null;
 alter table public.generation_tasks drop constraint if exists generation_tasks_task_type_check;
 alter table public.generation_tasks
   add constraint generation_tasks_task_type_check check (task_type in ('scene_image'));
@@ -325,6 +359,11 @@ create trigger set_image_generation_attempts_updated_at
 before update on public.image_generation_attempts
 for each row execute function public.set_updated_at();
 
+drop trigger if exists set_app_settings_updated_at on public.app_settings;
+create trigger set_app_settings_updated_at
+before update on public.app_settings
+for each row execute function public.set_updated_at();
+
 alter table public.books enable row level security;
 alter table public.chapters enable row level security;
 alter table public.generation_tasks enable row level security;
@@ -333,6 +372,8 @@ alter table public.scene_candidates enable row level security;
 alter table public.reading_progress enable row level security;
 alter table public.book_visual_profiles enable row level security;
 alter table public.image_generation_attempts enable row level security;
+alter table public.app_settings enable row level security;
+alter table public.book_source_versions enable row level security;
 
 -- T8 backend uses SUPABASE_SERVICE_ROLE_KEY from the server only.
 -- Public client policies should be added later after auth/user ownership is designed.

@@ -8,6 +8,7 @@ export const books: Book[] = [
     accent: '#2f4a40',
     currentChapterId: 'rain-chapter-1',
     lastReadLabel: '上次读到清晨街道，阅读到 38%',
+    illustrationsEnabled: true,
   },
   {
     id: 'street',
@@ -16,6 +17,7 @@ export const books: Book[] = [
     accent: '#8b6b3c',
     currentChapterId: 'street-chapter-1',
     lastReadLabel: '上次读到旧书店门口',
+    illustrationsEnabled: true,
   },
   {
     id: 'station',
@@ -24,6 +26,7 @@ export const books: Book[] = [
     accent: '#526b83',
     currentChapterId: 'station-chapter-1',
     lastReadLabel: '准备开始第一章',
+    illustrationsEnabled: false,
   },
 ];
 

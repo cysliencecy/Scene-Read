@@ -18,6 +18,14 @@ from .types import (
 
 VALID_IMAGE_TYPES: set[ImageType] = {"scene", "character", "object"}
 CLASSIFICATION_CONFIDENCE_THRESHOLD = 0.65
+QUALITATIVE_READING_VALUES = {
+    "high": 0.9,
+    "medium": 0.6,
+    "low": 0.3,
+    "高": 0.9,
+    "中": 0.6,
+    "低": 0.3,
+}
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -62,6 +70,18 @@ def _validate_evidence(value: Any) -> tuple[VisualEvidence, ...]:
         for item in value
     )
     return evidence
+
+
+def _normalize_discovery_reading_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return QUALITATIVE_READING_VALUES.get(value.strip().lower(), value)
+    return value
+
+
+def _normalize_discovery_evidence(value: Any, source_block_id: str) -> Any:
+    if isinstance(value, str) and value.strip():
+        return [{"sourceBlockId": source_block_id, "sourceText": value.strip()}]
+    return value
 
 
 def _validate_profile_suggestions(value: Any) -> tuple[VisualProfileFact, ...]:
@@ -155,9 +175,9 @@ def validate_discovery_candidates(
                     chapterId=payload["chapterId"],
                     sourceBlockId=source_block_id,
                     position=paragraph_positions[source_block_id],
-                    readingValue=_normalized_confidence(item.get("readingValue")),
+                    readingValue=_normalized_confidence(_normalize_discovery_reading_value(item.get("readingValue"))),
                     reason=_required_text(item.get("reason"), "reason"),
-                    evidence=_validate_evidence(item.get("evidence")),
+                    evidence=_validate_evidence(_normalize_discovery_evidence(item.get("evidence"), source_block_id)),
                 )
             )
             seen_ids.add(source_block_id)

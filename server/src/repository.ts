@@ -21,6 +21,8 @@ import type {
   ChapterBlock,
   GenerationTask,
   ImageGenerationAttempt,
+  IllustrationSettings,
+  IllustrationUsageStats,
   SceneImage,
   SceneCandidate,
   StoredImageType,
@@ -101,11 +103,12 @@ export const mapBookRow = (row: BookRow): Book => ({
   authors: row.authors,
   languages: row.languages,
   coverUrl: getPublicStorageUrl('book-covers', row.cover_path),
-  source: row.source === 'gutenberg' || row.source === 'wikisource' ? row.source : undefined,
+  source: row.source === 'gutenberg' || row.source === 'wikisource' || row.source === 'chinese_poetry' || row.source === 'private_json' ? row.source : undefined,
   sourceBookId: row.source_book_id ?? undefined,
   sourceUrl: row.source_url ?? undefined,
   sourceAttribution: row.source_attribution ?? undefined,
   copyrightStatus: row.copyright_status ?? undefined,
+  illustrationsEnabled: row.illustrations_enabled ?? false,
 });
 
 const toChapter = (row: {
@@ -127,12 +130,13 @@ const toGenerationTask = (row: {
   book_id?: string | null;
   chapter_id: string;
   progress: number;
-  status: 'queued' | 'recognizing' | 'generating' | 'completed' | 'failed';
+  status: GenerationTask['status'];
   task_type?: 'scene_image' | null;
   label: string;
   error_message?: string | null;
   provider?: string | null;
   duration_ms?: number | null;
+  created_at?: string;
 }): GenerationTask => ({
   id: row.id,
   bookId: row.book_id ?? undefined,
@@ -144,6 +148,7 @@ const toGenerationTask = (row: {
   errorMessage: row.error_message ?? undefined,
   provider: row.provider ?? undefined,
   durationMs: row.duration_ms ?? undefined,
+  createdAt: row.created_at,
 });
 
 const getPublicSceneImageUrl = (imagePath: string | null | undefined): string | undefined => {
@@ -386,6 +391,8 @@ export function createInMemoryImageRepository(options: { legacyImages?: SceneIma
 const apiMemoryRepository = createInMemoryImageRepository();
 const apiMemoryTasks = new Map(mockGenerationTasks.map((task) => [task.id, { ...task }]));
 const apiLegacyCandidates = new Map(mockLegacySceneCandidates.map((candidate) => [candidate.id, { ...candidate }]));
+let apiMemoryIllustrationSettings: IllustrationSettings = { enabled: false, monthlyTaskLimit: 100 };
+const apiMemoryBookIllustrationOverrides = new Map<string, boolean>();
 
 
 const requireSupabase = () => {
@@ -398,9 +405,113 @@ const requireSupabase = () => {
 
 export const dataMode = isSupabaseConfigured ? 'supabase' : 'mock';
 
+export async function getIllustrationSettings(): Promise<IllustrationSettings> {
+  if (!supabase) return { ...apiMemoryIllustrationSettings };
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('illustrations_enabled, monthly_task_limit')
+    .eq('id', 'single-user')
+    .maybeSingle();
+  if (error) throw error;
+  return {
+    enabled: data?.illustrations_enabled ?? false,
+    monthlyTaskLimit: data?.monthly_task_limit ?? 100,
+  };
+}
+
+export async function updateIllustrationSettings(input: Partial<IllustrationSettings>): Promise<IllustrationSettings> {
+  const current = await getIllustrationSettings();
+  const next = {
+    enabled: input.enabled ?? current.enabled,
+    monthlyTaskLimit: input.monthlyTaskLimit ?? current.monthlyTaskLimit,
+  };
+  if (!Number.isInteger(next.monthlyTaskLimit) || next.monthlyTaskLimit < 1 || next.monthlyTaskLimit > 10000) {
+    throw new Error('INVALID_MONTHLY_TASK_LIMIT');
+  }
+  if (!supabase) {
+    apiMemoryIllustrationSettings = next;
+    return { ...next };
+  }
+  const { data, error } = await supabase
+    .from('app_settings')
+    .upsert({
+      id: 'single-user',
+      illustrations_enabled: next.enabled,
+      monthly_task_limit: next.monthlyTaskLimit,
+    })
+    .select('illustrations_enabled, monthly_task_limit')
+    .single();
+  if (error) throw error;
+  return { enabled: data.illustrations_enabled, monthlyTaskLimit: data.monthly_task_limit };
+}
+
+export async function updateBookIllustrations(bookId: string, enabled: boolean): Promise<Book | null> {
+  if (!supabase) {
+    const book = await getBook(bookId);
+    if (!book) return null;
+    apiMemoryBookIllustrationOverrides.set(bookId, enabled);
+    return { ...book, illustrationsEnabled: enabled };
+  }
+  const { data, error } = await supabase
+    .from('books')
+    .update({ illustrations_enabled: enabled })
+    .eq('id', bookId)
+    .select('*')
+    .maybeSingle();
+  if (error) throw error;
+  return data ? mapBookRow(data) : null;
+}
+
+export async function cancelQueuedIllustrationTasks(): Promise<number> {
+  if (!supabase) {
+    let count = 0;
+    for (const [id, task] of apiMemoryTasks) {
+      if (task.status !== 'queued') continue;
+      apiMemoryTasks.set(id, { ...task, status: 'cancelled', label: '插图服务已关闭，任务已取消' });
+      count += 1;
+    }
+    return count;
+  }
+  const { data, error } = await supabase
+    .from('generation_tasks')
+    .update({ status: 'cancelled', label: '插图服务已关闭，任务已取消' })
+    .eq('status', 'queued')
+    .select('id');
+  if (error) throw error;
+  return data.length;
+}
+
+export async function getIllustrationUsageStats(now = new Date()): Promise<IllustrationUsageStats> {
+  const settings = await getIllustrationSettings();
+  const month = now.toISOString().slice(0, 7);
+  const monthStart = `${month}-01T00:00:00.000Z`;
+  const tasks = !supabase
+    ? [...apiMemoryTasks.values()].filter((task) => task.createdAt?.startsWith(month))
+    : await (async () => {
+      const { data, error } = await supabase
+        .from('generation_tasks')
+        .select('*')
+        .gte('created_at', monthStart);
+      if (error) throw error;
+      return data.map(toGenerationTask);
+    })();
+  const taskCount = tasks.length;
+  return {
+    month,
+    taskCount,
+    successCount: tasks.filter((task) => task.status === 'completed').length,
+    failureCount: tasks.filter((task) => task.status === 'failed').length,
+    monthlyTaskLimit: settings.monthlyTaskLimit,
+    remainingTasks: Math.max(0, settings.monthlyTaskLimit - taskCount),
+  };
+}
+
 export async function listBooks(): Promise<Book[]> {
   if (!supabase) {
-    return mockBooks;
+    return mockBooks.map((book) => ({
+      ...book,
+      illustrationsEnabled: apiMemoryBookIllustrationOverrides.get(book.id) ?? book.illustrationsEnabled ?? false,
+    }));
   }
 
   const { data, error } = await supabase.from('books').select('*').order('updated_at', { ascending: false });
@@ -410,7 +521,11 @@ export async function listBooks(): Promise<Book[]> {
 
 export async function getBook(bookId: string): Promise<Book | null> {
   if (!supabase) {
-    return mockBooks.find((book) => book.id === bookId) ?? null;
+    const book = mockBooks.find((item) => item.id === bookId);
+    return book ? {
+      ...book,
+      illustrationsEnabled: apiMemoryBookIllustrationOverrides.get(book.id) ?? book.illustrationsEnabled ?? false,
+    } : null;
   }
 
   const { data, error } = await supabase.from('books').select('*').eq('id', bookId).maybeSingle();
@@ -447,6 +562,7 @@ export async function deleteBook(bookId: string): Promise<boolean> {
 export async function createBook(input: BookInput): Promise<Book> {
   const client = requireSupabase();
   const id = input.id ?? createId('book');
+  const settings = await getIllustrationSettings();
 
   const { data, error } = await client
     .from('books')
@@ -465,6 +581,7 @@ export async function createBook(input: BookInput): Promise<Book> {
       source_url: input.sourceUrl ?? null,
       source_attribution: input.sourceAttribution ?? null,
       copyright_status: input.copyrightStatus ?? null,
+      illustrations_enabled: input.illustrationsEnabled ?? settings.enabled,
     })
     .select('*')
     .single();
@@ -536,11 +653,17 @@ export const buildImportOnlineBookRpcArgs = (input: ImportOnlineBookInput) => ({
   p_source_attribution: input.book.sourceAttribution ?? null,
   p_title: input.book.title,
   p_visual_style: input.book.visualStyle ?? '写实',
+  p_illustrations_enabled: input.book.illustrationsEnabled ?? false,
 });
 
 export async function importOnlineBook(input: ImportOnlineBookInput): Promise<Book> {
   const client = requireSupabase();
-  const { data, error } = await client.rpc('import_online_book', buildImportOnlineBookRpcArgs(input));
+  const settings = await getIllustrationSettings();
+  const resolvedInput = {
+    ...input,
+    book: { ...input.book, illustrationsEnabled: input.book.illustrationsEnabled ?? settings.enabled },
+  };
+  const { data, error } = await client.rpc('import_online_book', buildImportOnlineBookRpcArgs(resolvedInput));
   if (error) throw error;
   const row = (Array.isArray(data) ? data[0] : data) as BookRow | undefined;
   if (!row) throw new Error('ONLINE_BOOK_IMPORT_RETURNED_NO_BOOK');
@@ -637,21 +760,24 @@ export async function updateGenerationTask(
   taskId: string,
   input: Partial<Pick<GenerationTask, 'durationMs' | 'errorMessage' | 'label' | 'progress' | 'provider' | 'status'>>,
 ): Promise<GenerationTask> {
+  const normalizedInput = input.status && input.status !== 'failed' && input.errorMessage === undefined
+    ? { ...input, errorMessage: null }
+    : input;
   if (!supabase) {
     const existing = apiMemoryTasks.get(taskId);
     if (!existing) throw new Error('TASK_NOT_FOUND');
-    const updated = { ...existing, ...input };
+    const updated = { ...existing, ...normalizedInput, errorMessage: normalizedInput.errorMessage ?? undefined };
     apiMemoryTasks.set(taskId, updated);
     return updated;
   }
   const client = requireSupabase();
   const payload = {
-    progress: input.progress,
-    status: input.status,
-    label: input.label,
-    error_message: input.errorMessage,
-    provider: input.provider,
-    duration_ms: input.durationMs,
+    progress: normalizedInput.progress,
+    status: normalizedInput.status,
+    label: normalizedInput.label,
+    error_message: normalizedInput.errorMessage,
+    provider: normalizedInput.provider,
+    duration_ms: normalizedInput.durationMs,
   };
   const result = await client.from('generation_tasks').update(payload).eq('id', taskId).select('*').single();
 
@@ -662,10 +788,10 @@ export async function updateGenerationTask(
   const legacyResult = await client
     .from('generation_tasks')
     .update({
-      progress: input.progress,
-      status: input.status === 'failed' || input.status === 'recognizing' ? 'queued' : input.status,
-      label: input.label,
-      error_message: input.errorMessage,
+      progress: normalizedInput.progress,
+      status: normalizedInput.status === 'failed' || normalizedInput.status === 'recognizing' ? 'queued' : normalizedInput.status,
+      label: normalizedInput.label,
+      error_message: normalizedInput.errorMessage,
     })
     .eq('id', taskId)
     .select('*')
@@ -692,6 +818,7 @@ export async function createGenerationTask(input: GenerationTaskInput): Promise<
       errorMessage: input.errorMessage,
       provider: input.provider,
       durationMs: input.durationMs,
+      createdAt: input.createdAt ?? new Date().toISOString(),
     };
     apiMemoryTasks.set(id, task);
     return task;

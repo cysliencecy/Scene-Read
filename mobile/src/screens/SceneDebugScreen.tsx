@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme/colors';
 import type { CanonicalImageType, Chapter, SceneCandidateDebugDetail, SceneImage } from '../types/app';
-import { buildSceneDebugModel, CANONICAL_IMAGE_TYPES } from './sceneDebugModel';
+import { buildSceneDebugModel, CANONICAL_IMAGE_TYPES, imageTypeLabel } from './sceneDebugModel';
 
 type CommandState = { status: 'idle' | 'pending' | 'success' | 'error'; message?: string };
 
@@ -49,14 +49,14 @@ export function SceneDebugScreen({
       await onConfirmRegeneration(candidateId, imageType, idempotencyKey);
       setCommandStates((current) => ({
         ...current,
-        [candidateId]: { status: 'success', message: 'Regeneration queued and history refreshed.' },
+        [candidateId]: { status: 'success', message: '重新生成请求已进入队列，历史记录已刷新。' },
       }));
     } catch (error) {
       setCommandStates((current) => ({
         ...current,
         [candidateId]: {
           status: 'error',
-          message: error instanceof Error ? error.message : 'Regeneration request failed.',
+          message: error instanceof Error ? `重新生成失败：${error.message}` : '重新生成请求失败。',
         },
       }));
     }
@@ -65,8 +65,8 @@ export function SceneDebugScreen({
   if (!chapter) {
     return (
       <View style={styles.emptyState}>
-        <Text style={styles.emptyTitle}>No chapter selected</Text>
-        <Text style={styles.emptyText}>Open a chapter before inspecting image-generation details.</Text>
+        <Text style={styles.emptyTitle}>尚未选择章节</Text>
+        <Text style={styles.emptyText}>请先打开一个章节，再查看插图生成详情。</Text>
       </View>
     );
   }
@@ -76,14 +76,14 @@ export function SceneDebugScreen({
       <View style={styles.summary}>
         <Text style={styles.summaryTitle}>{chapter.title}</Text>
         <Text style={styles.summaryText}>
-          {chapterCandidates.length} candidate(s). Classification, evidence, prompts, audits, and override controls are debug-only.
+          共 {chapterCandidates.length} 个候选场景。分类、依据、提示词、审核和类型调整仅用于调试。
         </Text>
       </View>
 
       {chapterCandidates.length === 0 ? (
         <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>No candidate details</Text>
-          <Text style={styles.emptyText}>Wait for candidate classification or check the Server connection.</Text>
+          <Text style={styles.emptyTitle}>暂无候选场景详情</Text>
+          <Text style={styles.emptyText}>请等待候选场景分类完成，或检查服务端连接。</Text>
         </View>
       ) : chapterCandidates.map((candidate, index) => {
         const model = buildSceneDebugModel(candidate);
@@ -95,36 +95,36 @@ export function SceneDebugScreen({
         return (
           <View key={candidate.id} style={styles.card}>
             <View style={styles.cardHeader}>
-              <Text style={styles.order}>Candidate #{candidate.order + 1 || index + 1}</Text>
+              <Text style={styles.order}>候选场景 #{candidate.order + 1 || index + 1}</Text>
               <Text style={styles.confidence}>
-                {model.primaryConfidencePercent === null ? 'Legacy / unclassified' : `Primary ${model.primaryConfidencePercent}%`}
+                {model.primaryConfidencePercent === null ? '旧版数据 / 未分类' : `首选置信度 ${model.primaryConfidencePercent}%`}
               </Text>
             </View>
 
             <Text style={[styles.statusBanner, model.classificationStatus !== 'eligible' && styles.warningBanner]}>
               {model.classificationMessage}
             </Text>
-            <Text style={styles.meta}>sourceBlockId: {model.sourceBlockId}</Text>
-            <Text style={styles.meta}>classification: {model.classificationModel ?? 'not classified'} / {model.promptVersion ?? 'unavailable'}</Text>
-            <Text style={styles.meta}>composition contract: {model.contractVersion ?? 'unavailable'}</Text>
-            <Text style={styles.meta}>profile: {model.profileVersion ?? 'none'}</Text>
-            <Text style={styles.meta}>stored/effective type: {candidate.storedImageType ?? candidate.imageType ?? '-'} / {candidate.effectiveImageType ?? '-'}</Text>
+            <Text style={styles.meta}>来源段落 ID：{model.sourceBlockId}</Text>
+            <Text style={styles.meta}>分类模型：{model.classificationModel ?? '未分类'} / {model.promptVersion ?? '无版本信息'}</Text>
+            <Text style={styles.meta}>构图协议：{model.contractVersion ?? '无版本信息'}</Text>
+            <Text style={styles.meta}>配置版本：{model.profileVersion ?? '无'}</Text>
+            <Text style={styles.meta}>保存类型 / 生效类型：{imageTypeLabel(candidate.storedImageType ?? candidate.imageType)} / {imageTypeLabel(candidate.effectiveImageType)}</Text>
 
-            <Text style={styles.sectionLabel}>Ranked image types</Text>
+            <Text style={styles.sectionLabel}>图片类型排名</Text>
             {model.rankedTypes.length === 0 ? (
-              <Text style={styles.bodyText}>No canonical ranking is stored for this legacy candidate.</Text>
+              <Text style={styles.bodyText}>该旧版候选场景没有保存标准图片类型排名。</Text>
             ) : (
               <View style={styles.rankList}>
                 {model.rankedTypes.map((ranked, rankIndex) => (
                 <View key={ranked.imageType} style={styles.rankRow}>
-                  <Text style={styles.rankName}>{rankIndex + 1}. {ranked.imageType}{ranked.isPrimary ? ' (primary)' : ''}</Text>
+                  <Text style={styles.rankName}>{rankIndex + 1}. {imageTypeLabel(ranked.imageType)}{ranked.isPrimary ? '（首选）' : ''}</Text>
                   <Text style={styles.rankConfidence}>{ranked.confidencePercent}%</Text>
                 </View>
                 ))}
               </View>
             )}
 
-            <Text style={styles.sectionLabel}>Evidence</Text>
+            <Text style={styles.sectionLabel}>分类依据</Text>
             {model.evidence.map((evidence) => (
               <View key={`${evidence.sourceBlockId}:${evidence.sourceText}`} style={styles.sourceBox}>
                 <Text style={styles.sourceLabel}>{evidence.sourceBlockId}</Text>
@@ -136,24 +136,24 @@ export function SceneDebugScreen({
               {model.auxiliaryTags.map((tag) => <Text key={tag} style={styles.tag}>{tag}</Text>)}
             </View>
 
-            <Text style={styles.sectionLabel}>Candidate prompts</Text>
-            <Text style={styles.promptText}>draft: {candidate.promptDraft || '-'}</Text>
-            <Text style={styles.promptText}>final: {candidate.finalPrompt ?? '-'}</Text>
+            <Text style={styles.sectionLabel}>候选提示词</Text>
+            <Text style={styles.promptText}>草稿：{candidate.promptDraft || '-'}</Text>
+            <Text style={styles.promptText}>最终版本：{candidate.finalPrompt ?? '-'}</Text>
 
-            <Text style={styles.sectionLabel}>Generation history (newest first)</Text>
-            {model.history.length === 0 ? <Text style={styles.bodyText}>No attempts.</Text> : model.history.map((attempt) => (
+            <Text style={styles.sectionLabel}>生成历史（最新在前）</Text>
+            {model.history.length === 0 ? <Text style={styles.bodyText}>暂无生成记录。</Text> : model.history.map((attempt) => (
               <View key={attempt.id} style={styles.historyCard}>
                 <View style={styles.cardHeader}>
-                  <Text style={styles.historyTitle}>{attempt.trigger} · {attempt.requestedType}</Text>
+                  <Text style={styles.historyTitle}>{attempt.trigger === 'manual' ? '手动' : '自动'} · {imageTypeLabel(attempt.requestedType)}</Text>
                   <Text style={[styles.historyStatus, attempt.status === 'blocked' && styles.blockedText]}>{attempt.statusLabel}</Text>
                 </View>
                 <Text style={styles.meta}>{attempt.createdAt}</Text>
-                <Text style={styles.meta}>provider: {attempt.provider ?? '-'} / {attempt.model ?? '-'}</Text>
+                <Text style={styles.meta}>服务商 / 模型：{attempt.provider ?? '-'} / {attempt.model ?? '-'}</Text>
                 <Text style={styles.promptText}>{attempt.prompt}</Text>
                 {attempt.imageUrl ? (
                   <Image
                     accessible
-                    accessibilityLabel={`${attempt.statusLabel} generated image`}
+                    accessibilityLabel={`${attempt.statusLabel}的生成图片`}
                     source={{ uri: attempt.imageUrl }}
                     style={styles.previewImage}
                   />
@@ -161,12 +161,12 @@ export function SceneDebugScreen({
                 {attempt.audit ? (
                   <>
                     <Text style={styles.meta}>
-                      audit: {attempt.audit.verdict} · {attempt.audit.provider}/{attempt.audit.model} · {attempt.audit.auditVersion}
+                      审核：{attempt.audit.verdict === 'publishable' ? '可发布' : '已阻止'} · {attempt.audit.provider}/{attempt.audit.model} · {attempt.audit.auditVersion}
                     </Text>
                     {attempt.auditRules.map((rule) => (
                       <View key={`${attempt.id}:${rule.rule}`} style={styles.auditRule}>
                         <Text style={[styles.auditSeverity, rule.severity === 'severe' && styles.blockedText]}>
-                          {rule.severityLabel} · {rule.passed ? 'pass' : 'fail'} · {rule.rule}
+                          {rule.severityLabel} · {rule.passed ? '通过' : '未通过'} · {rule.rule}
                         </Text>
                         <Text style={styles.bodyText}>{rule.explanation}</Text>
                       </View>
@@ -177,10 +177,10 @@ export function SceneDebugScreen({
             ))}
 
             {publishedImage?.imageUrl ? (
-              <Text style={styles.meta}>Reader projection: {publishedImage.id}</Text>
+              <Text style={styles.meta}>阅读页图片记录：{publishedImage.id}</Text>
             ) : null}
 
-            <Text style={styles.sectionLabel}>Manual canonical override</Text>
+            <Text style={styles.sectionLabel}>手动调整标准图片类型</Text>
             {model.canConfirmOverride && selectedType ? (
               <>
                 <View style={styles.typeGrid}>
@@ -188,21 +188,21 @@ export function SceneDebugScreen({
                     const selected = selectedType === imageType;
                     return (
                       <Pressable
-                        accessibilityLabel={`Select ${imageType} override for candidate ${candidate.id}`}
+                        accessibilityLabel={`将候选场景 ${candidate.id} 调整为${imageTypeLabel(imageType)}`}
                         accessibilityRole="button"
                         accessibilityState={{ selected }}
                         key={imageType}
                         onPress={() => selectOverride(candidate.id, imageType)}
                         style={[styles.typeButton, selected && styles.typeButtonSelected]}
                       >
-                        <Text style={[styles.typeButtonText, selected && styles.typeButtonTextSelected]}>{imageType}</Text>
+                        <Text style={[styles.typeButtonText, selected && styles.typeButtonTextSelected]}>{imageTypeLabel(imageType)}</Text>
                       </Pressable>
                     );
                   })}
                 </View>
-                <Text style={styles.bodyText}>Selection is local only. Confirm separately to create a request.</Text>
+                <Text style={styles.bodyText}>当前选择只保存在本页，点击确认后才会创建重新生成请求。</Text>
                 <Pressable
-                  accessibilityLabel={`Confirm regeneration for candidate ${candidate.id} as ${selectedType}`}
+                  accessibilityLabel={`确认将候选场景 ${candidate.id} 按${imageTypeLabel(selectedType)}重新生成`}
                   accessibilityRole="button"
                   accessibilityState={{ disabled: commandState.status === 'pending' }}
                   disabled={commandState.status === 'pending'}
@@ -210,12 +210,12 @@ export function SceneDebugScreen({
                   style={[styles.confirmButton, commandState.status === 'pending' && styles.confirmButtonDisabled]}
                 >
                   <Text style={styles.confirmButtonText}>
-                    {commandState.status === 'pending' ? 'Submitting…' : `Confirm regeneration as ${selectedType}`}
+                    {commandState.status === 'pending' ? '正在提交…' : `确认按${imageTypeLabel(selectedType)}重新生成`}
                   </Text>
                 </Pressable>
               </>
             ) : (
-              <Text style={styles.bodyText}>Override confirmation is unavailable until reclassification provides a canonical type.</Text>
+              <Text style={styles.bodyText}>重新分类并获得标准图片类型后，才能确认类型调整。</Text>
             )}
             {commandState.message ? (
               <Text style={commandState.status === 'error' ? styles.errorText : styles.successText}>{commandState.message}</Text>

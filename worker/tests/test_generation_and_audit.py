@@ -197,6 +197,20 @@ class LiveProviderBoundaryTest(unittest.TestCase):
 
 
 class AuditBoundaryTest(unittest.TestCase):
+    def test_explicit_demo_bypass_returns_traceable_publishable_audit_without_network(self) -> None:
+        artifact = GeneratedImageArtifact("image-data", "image/png", "glm", "glm-image", 900, 600)
+        with patch.dict("os.environ", {"DEMO_SKIP_IMAGE_AUDIT": "true"}, clear=True), patch(
+            "scene_reader_worker.audit.urllib.request.urlopen"
+        ) as urlopen:
+            result = audit_image(artifact, formal_request())
+
+        urlopen.assert_not_called()
+        self.assertEqual(result.verdict, "publishable")
+        self.assertEqual(result.provider, "demo-bypass")
+        self.assertEqual(result.auditVersion, "demo-audit-bypass-v1")
+        self.assertEqual(result.rules[0].rule, "demo-audit-bypass")
+        self.assertEqual(result.rules[0].severity, "warning")
+
     def test_missing_or_blank_audit_config_fails_before_network(self) -> None:
         artifact = GeneratedImageArtifact("image-data", "image/png", "glm", "glm-image", 900, 600)
         configurations = (

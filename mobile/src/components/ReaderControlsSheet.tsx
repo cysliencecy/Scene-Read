@@ -1,6 +1,7 @@
 import { useRef } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import type { Chapter } from '../types/app';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import type { Chapter, GenerationTask, SceneImage } from '../types/app';
+import { getChapterImageStatus } from './chapterImageStatus';
 import type {
   ReaderFontFamily,
   ReaderFontSize,
@@ -24,18 +25,28 @@ export function ReaderControlsSheet({
   activePanel,
   chapters,
   currentChapterId,
+  generationTasks,
+  sceneImages,
   preferences,
   onActivePanelChange,
   onChapterChange,
   onPreferencesChange,
+  illustrationsEnabled,
+  illustrationToggleDisabled,
+  onToggleIllustrations,
 }: {
   activePanel: ReaderControlPanel;
   chapters: Chapter[];
   currentChapterId: string;
+  generationTasks: GenerationTask[];
+  sceneImages: SceneImage[];
   preferences: ReaderPreferences;
   onActivePanelChange: (panel: ReaderControlPanel) => void;
   onChapterChange: (chapterId: string) => void;
   onPreferencesChange: (preferences: ReaderPreferences) => void;
+  illustrationsEnabled: boolean;
+  illustrationToggleDisabled: boolean;
+  onToggleIllustrations: (enabled: boolean) => void;
 }) {
   const panelTouchStartY = useRef(0);
   const isNight = preferences.theme === '夜间';
@@ -62,6 +73,7 @@ export function ReaderControlsSheet({
           >
             {chapters.map((chapter, index) => {
               const active = chapter.id === currentChapterId;
+              const imageStatus = getChapterImageStatus(chapter.id, generationTasks, sceneImages);
               return (
                 <Pressable
                   accessibilityRole="button"
@@ -75,7 +87,24 @@ export function ReaderControlsSheet({
                   <Text numberOfLines={2} style={[primaryTextStyle, styles.chapterTitle, active && styles.activeText]}>
                     {chapter.title}
                   </Text>
-                  {active && <Text style={styles.currentLabel}>当前</Text>}
+                  <View style={styles.chapterTrailing}>
+                    {imageStatus === 'generating' && (
+                      <ActivityIndicator
+                        accessibilityLabel="图片生成中"
+                        color="#b18445"
+                        size="small"
+                        style={styles.chapterImageGenerating}
+                      />
+                    )}
+                    {imageStatus === 'generated' && (
+                      <View accessible accessibilityLabel="图片已生成" style={styles.chapterBookIcon}>
+                        <View style={[styles.chapterBookPage, styles.chapterBookPageLeft]} />
+                        <View style={[styles.chapterBookPage, styles.chapterBookPageRight]} />
+                        <View style={styles.chapterBookSpine} />
+                      </View>
+                    )}
+                    {active && <Text style={styles.currentLabel}>当前</Text>}
+                  </View>
                 </Pressable>
               );
             })}
@@ -188,6 +217,15 @@ export function ReaderControlsSheet({
             </Pressable>
           );
         })}
+        <View style={styles.toolbarSwitch}>
+          <Switch
+            accessibilityLabel="本书插图"
+            disabled={illustrationToggleDisabled}
+            onValueChange={onToggleIllustrations}
+            value={illustrationsEnabled}
+          />
+          <Text style={secondaryTextStyle}>插图</Text>
+        </View>
       </View>
     </View>
   );
@@ -288,6 +326,7 @@ const styles = StyleSheet.create({
   toolbarNight: { backgroundColor: 'rgba(23,25,22,0.99)', borderTopColor: 'rgba(255,255,255,0.12)' },
   toolbarButton: { minWidth: 72, height: 58, alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 16 },
   toolbarButtonActive: { backgroundColor: 'rgba(109,137,124,0.16)' },
+  toolbarSwitch: { minWidth: 72, height: 58, alignItems: 'center', justifyContent: 'center' },
   toolbarIcon: { fontSize: 18, lineHeight: 22 },
   primaryText: { color: '#28231d', fontSize: 14, fontWeight: '800' },
   primaryTextNight: { color: '#f3ead7' },
@@ -300,6 +339,13 @@ const styles = StyleSheet.create({
   chapterNumber: { width: 24, fontVariant: ['tabular-nums'] },
   chapterRowActive: { backgroundColor: 'rgba(109,137,124,0.14)' },
   chapterTitle: { flex: 1 },
+  chapterTrailing: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  chapterImageGenerating: { width: 20, height: 20 },
+  chapterBookIcon: { width: 20, height: 17, flexDirection: 'row', position: 'relative' },
+  chapterBookPage: { flex: 1, borderWidth: 1.6, borderColor: '#4d7565', backgroundColor: 'rgba(77,117,101,0.12)' },
+  chapterBookPageLeft: { borderTopLeftRadius: 3, borderBottomLeftRadius: 3, borderRightWidth: 0.8 },
+  chapterBookPageRight: { borderTopRightRadius: 3, borderBottomRightRadius: 3, borderLeftWidth: 0.8 },
+  chapterBookSpine: { position: 'absolute', left: 9.2, top: 2, bottom: 1, width: 1.6, backgroundColor: '#4d7565' },
   currentLabel: { color: '#4d7565', fontSize: 11, fontWeight: '800' },
   optionRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
   optionButton: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#f0eadf' },

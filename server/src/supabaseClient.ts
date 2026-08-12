@@ -25,6 +25,7 @@ export type Database = {
           source_url: string | null;
           source_attribution: string | null;
           copyright_status: 'public_domain' | 'authorized' | 'unknown' | null;
+          illustrations_enabled: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -44,6 +45,7 @@ export type Database = {
           source_url?: string | null;
           source_attribution?: string | null;
           copyright_status?: 'public_domain' | 'authorized' | 'unknown' | null;
+          illustrations_enabled?: boolean;
         };
         Update: {
           id?: string;
@@ -61,6 +63,7 @@ export type Database = {
           source_url?: string | null;
           source_attribution?: string | null;
           copyright_status?: 'public_domain' | 'authorized' | 'unknown' | null;
+          illustrations_enabled?: boolean;
         };
         Relationships: [];
       };
@@ -99,7 +102,7 @@ export type Database = {
           book_id?: string | null;
           chapter_id: string;
           progress: number;
-          status: 'queued' | 'recognizing' | 'generating' | 'completed' | 'failed';
+          status: 'queued' | 'recognizing' | 'generating' | 'completed' | 'failed' | 'cancelled';
           task_type?: 'scene_image' | null;
           label: string;
           error_message?: string | null;
@@ -113,7 +116,7 @@ export type Database = {
           book_id?: string | null;
           chapter_id: string;
           progress?: number;
-          status?: 'queued' | 'recognizing' | 'generating' | 'completed' | 'failed';
+          status?: 'queued' | 'recognizing' | 'generating' | 'completed' | 'failed' | 'cancelled';
           task_type?: 'scene_image' | null;
           label: string;
           error_message?: string | null;
@@ -125,7 +128,7 @@ export type Database = {
           book_id?: string | null;
           chapter_id?: string;
           progress?: number;
-          status?: 'queued' | 'recognizing' | 'generating' | 'completed' | 'failed';
+          status?: 'queued' | 'recognizing' | 'generating' | 'completed' | 'failed' | 'cancelled';
           task_type?: 'scene_image' | null;
           label?: string;
           error_message?: string | null;
@@ -267,6 +270,18 @@ export type Database = {
         Update: never;
         Relationships: [];
       };
+      app_settings: {
+        Row: { id: string; illustrations_enabled: boolean; monthly_task_limit: number; created_at: string; updated_at: string };
+        Insert: { id?: string; illustrations_enabled?: boolean; monthly_task_limit?: number };
+        Update: { illustrations_enabled?: boolean; monthly_task_limit?: number };
+        Relationships: [];
+      };
+      book_source_versions: {
+        Row: { id: string; source_id: string; version: number; name: string; config: Json; validation: Json | null; validated_at: string | null; enabled: boolean; removed_at: string | null; created_at: string };
+        Insert: { id?: string; source_id: string; version: number; name: string; config: Json; validation?: Json | null; validated_at?: string | null; enabled?: boolean; removed_at?: string | null };
+        Update: { validation?: Json | null; validated_at?: string | null; enabled?: boolean; removed_at?: string | null };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -284,6 +299,7 @@ export type Database = {
           p_source_attribution?: string | null;
           p_title: string;
           p_visual_style: string;
+          p_illustrations_enabled?: boolean;
         };
         Returns: Database['public']['Tables']['books']['Row'];
       };

@@ -6,6 +6,7 @@ const getStatusTitle = (status?: GenerationTask['status']) => {
   if (status === 'queued') return '场景图排队中';
   if (status === 'recognizing') return '正在识别场景';
   if (status === 'failed') return '场景图生成失败';
+  if (status === 'cancelled') return '插图任务已取消';
   if (status === 'completed') return '场景图已生成';
   return '场景图生成中';
 };

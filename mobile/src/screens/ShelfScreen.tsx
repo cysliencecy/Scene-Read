@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { colors } from '../theme/colors';
 import { Image } from 'react-native';
 import { sharedStyles } from '../theme/sharedStyles';
@@ -16,6 +16,11 @@ export function ShelfScreen({
   onImport,
   onRemoveSelectedImportedBooks,
   onRead,
+  illustrationsEnabled,
+  illustrationToggleDisabled,
+  illustrationError,
+  onOpenBookSourceDebug,
+  onToggleIllustrations,
   onToggleBookSelection,
   onToggleEditingShelf,
 }: {
@@ -26,6 +31,11 @@ export function ShelfScreen({
   onImport: () => void;
   onRemoveSelectedImportedBooks: () => void;
   onRead: (bookId: string) => void;
+  illustrationsEnabled: boolean;
+  illustrationToggleDisabled: boolean;
+  illustrationError?: string | null;
+  onOpenBookSourceDebug?: () => void;
+  onToggleIllustrations: (enabled: boolean) => void;
   onToggleBookSelection: (bookId: string) => void;
   onToggleEditingShelf: () => void;
 }) {
@@ -40,7 +50,19 @@ export function ShelfScreen({
       <ScrollView style={sharedStyles.screen} contentContainerStyle={sharedStyles.screenContent}>
         <View style={styles.shelfHeader}>
           <Text style={styles.logo}>阅境</Text>
+          <View style={styles.illustrationSwitch}>
+            <Pressable disabled={!onOpenBookSourceDebug} onLongPress={onOpenBookSourceDebug}>
+              <Text style={styles.illustrationSwitchText}>插图</Text>
+            </Pressable>
+            <Switch
+              accessibilityLabel="使用插图服务"
+              disabled={illustrationToggleDisabled}
+              onValueChange={onToggleIllustrations}
+              value={illustrationsEnabled}
+            />
+          </View>
         </View>
+        {illustrationError ? <Text style={styles.illustrationError}>{illustrationError}</Text> : null}
 
         {featuredBook ? (
           <Pressable
@@ -152,8 +174,11 @@ export function ShelfScreen({
 
 const styles = StyleSheet.create({
   shell: { flex: 1 },
-  shelfHeader: { height: 50, justifyContent: 'center' },
+  shelfHeader: { height: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   logo: { color: colors.ink, fontSize: 25, fontWeight: '800' },
+  illustrationSwitch: { minHeight: 36, borderRadius: 18, paddingLeft: 12, paddingRight: 6, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.sageSoft },
+  illustrationSwitchText: { color: colors.deep, fontSize: 12, fontWeight: '800' },
+  illustrationError: { marginTop: -4, marginBottom: 8, color: '#9d3b34', fontSize: 11, textAlign: 'right' },
   heroCard: {
     minHeight: 184,
     borderRadius: 24,

@@ -28,10 +28,12 @@ import {
   resolveWikisourceRoot,
   WIKISOURCE_SOURCE_ATTRIBUTION,
 } from './wikisource.js';
+import { createChinesePoetryProvider } from './chinesePoetry.js';
+import { createPrivateBookSourceProvider } from './privateBookSourceProvider.js';
 import type { WikisourceClientOptions } from './wikisource.js';
 import type { ImportOnlineBookInput } from './repository.js';
 
-const sourcePriority = { wikisource: 0, gutenberg: 1 } as const;
+const sourcePriority = { chinese_poetry: 0, private_json: 1, wikisource: 2, gutenberg: 3 } as const;
 const MAX_WIKISOURCE_BODY_BYTES = 20 * 1024 * 1024;
 
 export async function aggregateOnlineBookSearch(
@@ -229,7 +231,7 @@ export async function importOnlineBookBySource(
   visualStyle: VisualStyle,
   registry: OnlineBookProviderRegistry = onlineBookProviderRegistry,
 ) {
-  if (source !== 'gutenberg' && source !== 'wikisource') {
+  if (source !== 'gutenberg' && source !== 'wikisource' && source !== 'chinese_poetry' && source !== 'private_json') {
     throw new OnlineBookError('INVALID_ONLINE_BOOK', 400);
   }
   const provider = registry.get(source);
@@ -310,3 +312,5 @@ export async function importGutendexBook(
 
 onlineBookProviderRegistry.register(createGutendexProvider(importGutendexBook));
 onlineBookProviderRegistry.register(createWikisourceProvider(importWikisourceBook));
+onlineBookProviderRegistry.register(createChinesePoetryProvider());
+onlineBookProviderRegistry.register(createPrivateBookSourceProvider());

@@ -78,7 +78,9 @@ export function ReaderScreen({
   onBack,
   onChapterChange,
   onOpenSceneDebug,
-  onRetryGenerationTask,
+  illustrationsEnabled,
+  illustrationToggleDisabled,
+  onToggleIllustrations,
 }: {
   chapter: Chapter;
   chapters: Chapter[];
@@ -88,7 +90,9 @@ export function ReaderScreen({
   onBack: () => void;
   onChapterChange: (chapterId: string, entry: ReaderChapterEntry) => void;
   onOpenSceneDebug: () => void;
-  onRetryGenerationTask: (taskId: string) => void;
+  illustrationsEnabled: boolean;
+  illustrationToggleDisabled: boolean;
+  onToggleIllustrations: (enabled: boolean) => void;
 }) {
   const listRef = useRef<FlatList<ReaderPage>>(null);
   const readerShellRef = useRef<View>(null);
@@ -321,7 +325,6 @@ export function ReaderScreen({
               errorMessage={task.errorMessage}
               progress={task.progress}
               label={task.label}
-              onRetry={() => onRetryGenerationTask(task.id)}
               status={task.status}
             />
           ) : null;
@@ -390,7 +393,11 @@ export function ReaderScreen({
             activePanel={activePanel}
             chapters={chapters}
             currentChapterId={chapter.id}
+            generationTasks={generationTasks}
+            sceneImages={filterPublishableReaderImages(sceneImages)}
             preferences={preferences}
+            illustrationsEnabled={illustrationsEnabled}
+            illustrationToggleDisabled={illustrationToggleDisabled}
             onActivePanelChange={setActivePanel}
             onChapterChange={(chapterId) => {
               setControlsVisible(false);
@@ -398,6 +405,7 @@ export function ReaderScreen({
               onChapterChange(chapterId, 'saved');
             }}
             onPreferencesChange={setPreferences}
+            onToggleIllustrations={onToggleIllustrations}
           />
         </>
       )}

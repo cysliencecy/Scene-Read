@@ -42,10 +42,18 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = stripped.strip("`").removeprefix("json").strip()
-    start, end = stripped.find("{"), stripped.rfind("}")
-    if start < 0 or end < start:
-        raise AiSceneRecognitionError("AI response did not contain a JSON object.")
-    parsed = json.loads(stripped[start : end + 1])
+    object_start = stripped.find("{")
+    array_start = stripped.find("[")
+    starts = [start for start in (object_start, array_start) if start >= 0]
+    if not starts:
+        raise AiSceneRecognitionError("AI response did not contain a JSON object or array.")
+    start = min(starts)
+    try:
+        parsed, _ = json.JSONDecoder().raw_decode(stripped[start:])
+    except json.JSONDecodeError as error:
+        raise AiSceneRecognitionError("AI response did not contain valid JSON.") from error
+    if isinstance(parsed, list):
+        return {"candidates": parsed}
     if not isinstance(parsed, dict):
         raise AiSceneRecognitionError("AI response JSON root was not an object.")
     return parsed

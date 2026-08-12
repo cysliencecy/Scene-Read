@@ -5,7 +5,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scene_reader_worker.cli import _post_attempt_to_api, _post_to_api, main
+from scene_reader_worker.cli import (
+    _automatic_attempt_key,
+    _automatic_task_terminal,
+    _post_attempt_to_api,
+    _post_to_api,
+    main,
+)
 from scene_reader_worker.pipeline import GenerationAttempt
 from scene_reader_worker.processor import ClassifiedCandidate
 from scene_reader_worker.types import (
@@ -127,6 +133,24 @@ def formal_worker_result() -> WorkerResult:
 
 
 class CliFormalGenerationTest(unittest.TestCase):
+    def test_demo_bypass_uses_separate_idempotency_key(self) -> None:
+        with patch.dict("os.environ", {"DEMO_SKIP_IMAGE_AUDIT": "true"}, clear=True):
+            key = _automatic_attempt_key("task-1", "candidate-1")
+
+        self.assertEqual(key, "task-1:candidate-1:demo-audit-bypass-v1")
+
+    def test_automatic_task_reports_audit_failure_instead_of_generated(self) -> None:
+        terminal = _automatic_task_terminal(
+            [{"status": "audit_failed"}],
+            provider="openai",
+            duration_ms=1234,
+        )
+
+        self.assertEqual(terminal["status"], "failed")
+        self.assertEqual(terminal["progress"], 0)
+        self.assertIn("审核失败", terminal["label"])
+        self.assertIn("audit_failed", terminal["errorMessage"])
+
     def test_fetched_chapter_profiles_are_passed_to_classification(self) -> None:
         payload = {
             **PAYLOAD,
