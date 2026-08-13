@@ -314,7 +314,8 @@ app.post('/online-books/import', async (request, response, next) => {
     const source = request.body?.source;
     const sourceBookId = request.body?.sourceBookId;
     const visualStyle = request.body?.visualStyle;
-    if ((source !== 'gutenberg' && source !== 'wikisource') || typeof sourceBookId !== 'string') {
+    const supportedSources = new Set(['gutenberg', 'wikisource', 'chinese_poetry', 'private_json']);
+    if (typeof source !== 'string' || !supportedSources.has(source) || typeof sourceBookId !== 'string') {
       response.status(400).json({ error: 'INVALID_ONLINE_BOOK' });
       return;
     }

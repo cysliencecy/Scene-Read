@@ -139,6 +139,22 @@ test('successful worker task update clears a stale failure message', async () =>
   assert.equal(Object.hasOwn(completed.body.data as object, 'errorMessage'), false);
 });
 
+test('online import route accepts authorized Chinese sources and still rejects unknown sources', async () => {
+  const chineseSource = await request('/online-books/import', {
+    method: 'POST',
+    body: JSON.stringify({ source: 'chinese_poetry', sourceBookId: 'daxue', visualStyle: '写实' }),
+  });
+  assert.equal(chineseSource.response.status, 503);
+  assert.equal(chineseSource.body.error, 'SUPABASE_NOT_CONFIGURED');
+
+  const unknownSource = await request('/online-books/import', {
+    method: 'POST',
+    body: JSON.stringify({ source: 'unknown', sourceBookId: 'daxue', visualStyle: '写实' }),
+  });
+  assert.equal(unknownSource.response.status, 400);
+  assert.equal(unknownSource.body.error, 'INVALID_ONLINE_BOOK');
+});
+
 test('candidate debug detail includes ranked evidence, threshold state, versions, and attempts', async () => {
   const candidateId = 'debug-candidate-complete';
   await request('/worker/scene-candidates', { method: 'POST', body: JSON.stringify(candidatePayload(candidateId)) });
