@@ -19,6 +19,8 @@ import { SceneImage } from '../components/SceneImage';
 import {
   DEFAULT_READER_PREFERENCES,
   findPageForAnchor,
+  getChapterPaginationKey,
+  getPageIndexForOffset,
   getReaderTypography,
   paginateChapter,
   type ReaderAnchor,
@@ -98,8 +100,12 @@ export function ReaderScreen({
   const readerShellRef = useRef<View>(null);
   const readerShellLeft = useRef(0);
   const touchStart = useRef({ x: 0, y: 0, time: 0 });
+  const userScrollInProgress = useRef(false);
+  const visiblePageRef = useRef(0);
   const currentAnchor = useRef<ReaderAnchor>({ blockId: `${chapter.id}:title`, offset: 0 });
   const restoreTarget = useRef<RestoreTarget>('loading');
+  const currentPageRef = useRef(0);
+  const panelReturnPosition = useRef<{ anchor: ReaderAnchor; page: number } | null>(null);
   const [restoreVersion, setRestoreVersion] = useState(0);
   const [layout, setLayout] = useState({ width: 0, height: 0 });
   const [preferences, setPreferences] = useState(DEFAULT_READER_PREFERENCES);
@@ -115,6 +121,7 @@ export function ReaderScreen({
     preferences.fontFamily === '宋体'
       ? Platform.select({ ios: 'Songti SC', android: 'serif', web: 'SimSun, Songti SC, serif' })
       : undefined;
+  const chapterPaginationKey = getChapterPaginationKey(chapter);
   const pages = useMemo(
     () =>
       layout.width > 0 && layout.height > 0
@@ -125,7 +132,7 @@ export function ReaderScreen({
             preferences,
           })
         : [],
-    [chapter, layout.height, layout.width, preferences],
+    [chapterPaginationKey, layout.height, layout.width, preferences],
   );
   const chapterSceneImages = useMemo(
     () => filterPublishableReaderImages(sceneImages).filter((image) => image.chapterId === chapter.id),
@@ -155,6 +162,8 @@ export function ReaderScreen({
   useEffect(() => {
     let cancelled = false;
     restoreTarget.current = 'loading';
+    currentPageRef.current = 0;
+    visiblePageRef.current = 0;
     setCurrentPage(0);
     setControlsVisible(false);
     setActivePanel(null);
@@ -182,6 +191,8 @@ export function ReaderScreen({
       requestAnimationFrame(() => {
         listRef.current?.scrollToOffset({ offset: nextIndex * layout.width, animated });
       });
+      currentPageRef.current = nextIndex;
+      visiblePageRef.current = nextIndex;
       setCurrentPage(nextIndex);
       currentAnchor.current = pages[nextIndex].anchor;
     },
@@ -201,17 +212,44 @@ export function ReaderScreen({
 
   useEffect(() => {
     if (pages.length === 0 || restoreTarget.current !== null) return;
-    scrollToPage(findPageForAnchor(pages, currentAnchor.current), false);
+    scrollToPage(findPageForAnchor(pages, currentAnchor.current, currentPageRef.current), false);
   }, [pages, scrollToPage]);
 
   const recordPage = useCallback(
     (pageIndex: number) => {
       if (!pages[pageIndex]) return;
+      currentPageRef.current = pageIndex;
+      visiblePageRef.current = pageIndex;
       setCurrentPage(pageIndex);
       currentAnchor.current = pages[pageIndex].anchor;
       saveReaderPosition(chapter.bookId, chapter.id, pages[pageIndex].anchor).catch(() => undefined);
     },
     [chapter.bookId, chapter.id, pages],
+  );
+
+  const changeActivePanel = useCallback(
+    (panel: ReaderControlPanel) => {
+      if (panel !== null) {
+        const visiblePage = visiblePageRef.current;
+        const visibleAnchor = pages[visiblePage]?.anchor ?? currentAnchor.current;
+        currentPageRef.current = visiblePage;
+        currentAnchor.current = visibleAnchor;
+        setCurrentPage(visiblePage);
+        panelReturnPosition.current = {
+          anchor: visibleAnchor,
+          page: visiblePage,
+        };
+        setActivePanel(panel);
+        return;
+      }
+
+      const returnPosition = panelReturnPosition.current;
+      panelReturnPosition.current = null;
+      setActivePanel(null);
+      if (!returnPosition) return;
+      scrollToPage(findPageForAnchor(pages, returnPosition.anchor, returnPosition.page), false);
+    },
+    [pages, scrollToPage],
   );
 
   const goToAdjacentChapter = useCallback(
@@ -271,16 +309,21 @@ export function ReaderScreen({
     } else if (localX > layout.width * (1 - SIDE_TAP_ZONE_RATIO)) {
       turnPageFromTap(1);
     } else {
+      const returnPage = visiblePageRef.current;
+      userScrollInProgress.current = false;
+      recordPage(returnPage);
       setControlsVisible((visible) => {
         if (visible) setActivePanel(null);
         return !visible;
       });
+      scrollToPage(returnPage, false);
     }
   };
 
   const handleMomentumScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    if (layout.width <= 0) return;
-    recordPage(Math.round(event.nativeEvent.contentOffset.x / layout.width));
+    if (layout.width <= 0 || controlsVisible || !userScrollInProgress.current) return;
+    userScrollInProgress.current = false;
+    recordPage(getPageIndexForOffset(event.nativeEvent.contentOffset.x, layout.width, pages.length));
   };
 
   const handleLayout = (event: LayoutChangeEvent) => {
@@ -357,9 +400,20 @@ export function ReaderScreen({
             horizontal
             keyExtractor={(page) => page.key}
             onMomentumScrollEnd={handleMomentumScrollEnd}
+            onScroll={(event) => {
+              visiblePageRef.current = getPageIndexForOffset(
+                event.nativeEvent.contentOffset.x,
+                layout.width,
+                pages.length,
+              );
+            }}
+            onScrollBeginDrag={() => {
+              userScrollInProgress.current = true;
+            }}
             pagingEnabled
             ref={listRef}
             renderItem={renderPage}
+            scrollEventThrottle={16}
             showsHorizontalScrollIndicator={false}
             style={styles.pageList}
           />
@@ -398,8 +452,9 @@ export function ReaderScreen({
             preferences={preferences}
             illustrationsEnabled={illustrationsEnabled}
             illustrationToggleDisabled={illustrationToggleDisabled}
-            onActivePanelChange={setActivePanel}
+            onActivePanelChange={changeActivePanel}
             onChapterChange={(chapterId) => {
+              panelReturnPosition.current = null;
               setControlsVisible(false);
               setActivePanel(null);
               onChapterChange(chapterId, 'saved');

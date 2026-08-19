@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_READER_PREFERENCES,
   findPageForAnchor,
+  getChapterPaginationKey,
+  getPageIndexForOffset,
   paginateChapter,
   type ReaderPageItem,
 } from '../src/reader/pagination';
@@ -26,6 +28,25 @@ const pages = paginateChapter({
   contentHeight: 420,
   preferences: DEFAULT_READER_PREFERENCES,
 });
+
+assert.equal(
+  getChapterPaginationKey(chapter),
+  getChapterPaginationKey({ ...chapter, blocks: chapter.blocks.map((block) => ({ ...block })) }),
+  'semantically unchanged chapter refreshes must keep a stable pagination key',
+);
+assert.notEqual(
+  getChapterPaginationKey(chapter),
+  getChapterPaginationKey({
+    ...chapter,
+    blocks: [...chapter.blocks, { id: 'new-paragraph', type: 'paragraph', text: 'new content' }],
+  }),
+  'real chapter block changes must invalidate pagination',
+);
+assert.equal(
+  getPageIndexForOffset(330, 320, pages.length),
+  1,
+  'a tap immediately after swiping must use the visibly scrolled page before momentum ends',
+);
 
 assert.ok(pages.length > 2, 'long chapters should be split into multiple pages');
 assert.equal(
@@ -52,5 +73,30 @@ const targetPage = findPageForAnchor(pages, {
   offset: targetFragment.startOffset,
 });
 assert.ok(targetPage > 0, 'logical anchors should restore a later reading page');
+
+assert.equal(
+  findPageForAnchor(pages, { blockId: 'replaced-scene-placeholder', offset: 0 }, targetPage),
+  targetPage,
+  'a replaced generated block should keep the current page instead of jumping to page one',
+);
+
+const imageChapter: Chapter = {
+  ...chapter,
+  blocks: chapter.blocks.map((block) =>
+    block.type === 'scene-placeholder'
+      ? { id: 'scene-image-block', type: 'scene-image' as const, imageId: 'scene-image-one' }
+      : block,
+  ),
+};
+const imagePages = paginateChapter({
+  chapter: imageChapter,
+  contentWidth: 320,
+  contentHeight: 420,
+  preferences: DEFAULT_READER_PREFERENCES,
+});
+assert.ok(
+  imagePages.length >= pages.length,
+  'a landscape image should reserve its real 3:2 display height during pagination',
+);
 
 console.log(`reader pagination checks passed (${pages.length} pages)`);

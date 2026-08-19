@@ -58,7 +58,17 @@ const LINE_HEIGHT_MULTIPLIERS: Record<ReaderLineSpacing, number> = {
 
 const PARAGRAPH_GAP = 16;
 const TITLE_HEIGHT = 48;
-const SCENE_FRAME_HEIGHT = 170;
+const SCENE_PLACEHOLDER_HEIGHT = 170;
+const SCENE_IMAGE_VERTICAL_SPACING = 24;
+
+export function getChapterPaginationKey(chapter: Chapter) {
+  return JSON.stringify([chapter.id, chapter.title, chapter.blocks]);
+}
+
+export function getPageIndexForOffset(offset: number, pageWidth: number, pageCount: number) {
+  if (pageWidth <= 0 || pageCount <= 0) return 0;
+  return Math.max(0, Math.min(Math.round(offset / pageWidth), pageCount - 1));
+}
 
 export function getReaderTypography(preferences: ReaderPreferences) {
   const fontSize = FONT_SIZE_TOKENS[preferences.fontSize];
@@ -160,7 +170,9 @@ export function paginateChapter({
         block.type === 'scene-image'
           ? { key: block.id, type: 'scene-image', block }
           : { key: block.id, type: 'scene-placeholder', block },
-        SCENE_FRAME_HEIGHT,
+        block.type === 'scene-image'
+          ? contentWidth * (2 / 3) + SCENE_IMAGE_VERTICAL_SPACING
+          : SCENE_PLACEHOLDER_HEIGHT,
       );
       return;
     }
@@ -198,7 +210,7 @@ export function paginateChapter({
   return pages.length > 0 ? pages : [{ key: `${chapter.id}-empty`, items: [], anchor: { blockId: `${chapter.id}:title`, offset: 0 } }];
 }
 
-export function findPageForAnchor(pages: ReaderPage[], anchor: ReaderAnchor) {
+export function findPageForAnchor(pages: ReaderPage[], anchor: ReaderAnchor, fallbackPage = 0) {
   const exactIndex = pages.findIndex((page) =>
     page.items.some((item) => {
       if (item.type === 'paragraph') {
@@ -208,5 +220,5 @@ export function findPageForAnchor(pages: ReaderPage[], anchor: ReaderAnchor) {
       return item.block.id === anchor.blockId;
     }),
   );
-  return exactIndex >= 0 ? exactIndex : 0;
+  return exactIndex >= 0 ? exactIndex : Math.max(0, Math.min(fallbackPage, pages.length - 1));
 }

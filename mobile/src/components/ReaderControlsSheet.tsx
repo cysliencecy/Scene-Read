@@ -77,8 +77,11 @@ export function ReaderControlsSheet({
               return (
                 <Pressable
                   accessibilityRole="button"
+                  disabled={active}
                   key={chapter.id}
-                  onPress={() => onChapterChange(chapter.id)}
+                  onPress={() => {
+                    if (!active) onChapterChange(chapter.id);
+                  }}
                   style={[styles.chapterRow, active && styles.chapterRowActive]}
                 >
                   <Text style={[secondaryTextStyle, styles.chapterNumber, active && styles.activeText]}>
@@ -222,6 +225,7 @@ export function ReaderControlsSheet({
             accessibilityLabel="本书插图"
             disabled={illustrationToggleDisabled}
             onValueChange={onToggleIllustrations}
+            style={styles.toolbarNativeSwitch}
             value={illustrationsEnabled}
           />
           <Text style={secondaryTextStyle}>插图</Text>
@@ -326,7 +330,8 @@ const styles = StyleSheet.create({
   toolbarNight: { backgroundColor: 'rgba(23,25,22,0.99)', borderTopColor: 'rgba(255,255,255,0.12)' },
   toolbarButton: { minWidth: 72, height: 58, alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 16 },
   toolbarButtonActive: { backgroundColor: 'rgba(109,137,124,0.16)' },
-  toolbarSwitch: { minWidth: 72, height: 58, alignItems: 'center', justifyContent: 'center' },
+  toolbarSwitch: { minWidth: 72, height: 58, alignItems: 'center', justifyContent: 'center', gap: 3 },
+  toolbarNativeSwitch: { width: 48, height: 22, transform: [{ scale: 0.8 }] },
   toolbarIcon: { fontSize: 18, lineHeight: 22 },
   primaryText: { color: '#28231d', fontSize: 14, fontWeight: '800' },
   primaryTextNight: { color: '#f3ead7' },

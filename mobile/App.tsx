@@ -724,7 +724,7 @@ export default function App() {
             />
           ) : (
             <View style={styles.emptyReader}>
-              <Text style={styles.emptyReaderText}>???????</Text>
+              <Text style={styles.emptyReaderText}>正在加载章节…</Text>
             </View>
           ))}
 

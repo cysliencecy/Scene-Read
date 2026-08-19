@@ -1,4 +1,5 @@
-import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 export function SceneImage({
   imageUrl,
@@ -9,6 +10,9 @@ export function SceneImage({
   variant: 'street' | 'office';
   onPreview?: (imageUrl: string) => void;
 }) {
+  const [loading, setLoading] = useState(Boolean(imageUrl));
+  const [failed, setFailed] = useState(false);
+
   if (imageUrl) {
     return (
       <Pressable
@@ -19,7 +23,31 @@ export function SceneImage({
         }}
         style={styles.sceneImage}
       >
-        <Image source={{ uri: imageUrl }} resizeMode="cover" style={styles.sceneImageContent} />
+        <Image
+          onError={() => {
+            setLoading(false);
+            setFailed(true);
+          }}
+          onLoadEnd={() => setLoading(false)}
+          onLoadStart={() => {
+            setFailed(false);
+            setLoading(true);
+          }}
+          source={{ uri: imageUrl }}
+          resizeMode="cover"
+          style={styles.sceneImageContent}
+        />
+        {loading ? (
+          <View pointerEvents="none" style={styles.loadingOverlay}>
+            <ActivityIndicator color="#4d7565" size="small" />
+            <Text style={styles.loadingText}>图片加载中</Text>
+          </View>
+        ) : null}
+        {failed ? (
+          <View pointerEvents="none" style={styles.loadingOverlay}>
+            <Text style={styles.loadingText}>图片加载失败</Text>
+          </View>
+        ) : null}
       </Pressable>
     );
   }
@@ -48,6 +76,18 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  loadingOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#f0eadf',
+  },
+  loadingText: { color: '#756f64', fontSize: 12, fontWeight: '700' },
   streetArt: {
     backgroundColor: '#2c4054',
   },
